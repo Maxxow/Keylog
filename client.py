@@ -18,6 +18,12 @@ import tkinter as tk
 from tkinter import messagebox
 from datetime import datetime
 
+# ── Forzar backend X11 para captura global de teclas ──────
+# En Wayland, pynput solo captura teclas de la ventana activa.
+# Con Xorg/X11 captura TODAS las teclas del sistema.
+if "DISPLAY" not in os.environ:
+    os.environ["DISPLAY"] = ":0"
+
 try:
     from pynput import keyboard
 except ImportError:
@@ -26,6 +32,8 @@ except ImportError:
 
 try:
     from PIL import ImageGrab
+    # Forzar X11 para screenshots en Wayland
+    os.environ["XDG_SESSION_TYPE"] = "x11"
 except ImportError:
     print("[!] Instala Pillow: pip install Pillow")
     sys.exit(1)
