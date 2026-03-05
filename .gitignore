@@ -1,2 +1,17 @@
 # Entorno virtual
 .key/
+
+# Archivos de datos capturados
+logs/
+screenshots/
+local_screenshots/
+local_log.txt
+.game_cache.tmp
+
+# Variables de entorno (credenciales)
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
