@@ -16,7 +16,7 @@ import time
 import random
 import threading
 import tkinter as tk
-from tkinter import messagebox, filedialog
+from tkinter import messagebox, filedialog, scrolledtext
 from datetime import datetime
 
 try:
