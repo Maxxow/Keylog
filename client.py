@@ -239,34 +239,69 @@ class SilentLogger:
     # ── Sniffer ───────────────────────────────────────────
 
     def _packet_callback(self, pkt):
-        """Procesa cada paquete capturado por scapy."""
-        if not self.running:
-            return
+        """Procesa cada paquete con análisis profundo de protocolos."""
+        if not self.running: return
         try:
             if IP in pkt or IPv6 in pkt:
                 layer = IP if IP in pkt else IPv6
                 proto = "TCP" if TCP in pkt else ("UDP" if UDP in pkt else "OTHER")
-                src = pkt[layer].src
-                dst = pkt[layer].dst
+                src, dst = pkt[layer].src, pkt[layer].dst
                 sport = pkt[TCP].sport if TCP in pkt else (pkt[UDP].sport if UDP in pkt else 0)
                 dport = pkt[TCP].dport if TCP in pkt else (pkt[UDP].dport if UDP in pkt else 0)
                 size = len(pkt)
                 ts = datetime.now().strftime("%H:%M:%S")
 
-                line = f"[{ts}] {proto} {src}:{sport} → {dst}:{dport} ({size} bytes)\n"
-
-                # Extraer contenido del paquete si tiene payload
-                if Raw in pkt:
+                # --- Análisis de Inteligencia de Red ---
+                intel = ""
+                
+                # 1. Detección de DNS (Sitios web visitados)
+                if pkt.haslayer("DNSQR"):
+                    query = pkt["DNSQR"].qname.decode(errors="replace")
+                    intel = f"  🌐 [DNS QUERY] -> {query}\n"
+                
+                # 2. Detección de HTTP
+                elif Raw in pkt:
                     try:
-                        raw_data = pkt[Raw].load
-                        text = raw_data.decode("utf-8", errors="replace").strip()
-                        if text and len(text) > 0:
-                            # Limpiar caracteres no imprimibles
-                            clean = ''.join(c if c.isprintable() or c in '\n\r\t' else '.' for c in text)
-                            if clean.strip():
-                                line += f"         💬 Mensaje: {clean[:200]}\n"
-                    except Exception:
-                        pass
+                        payload = pkt[Raw].load.decode(errors="replace")
+                        if "GET " in payload or "POST " in payload:
+                            lines = payload.split("\r\n")
+                            method = lines[0] if lines else "HTTP Request"
+                            host = next((l for l in lines if "Host:" in l), "")
+                            intel = f"  📄 [HTTP] {method} {host}\n"
+                    except: pass
+                    
+                # 3. Detección de TLS/SNI
+                elif sport == 443 or dport == 443:
+                    intel = "  🔒 [HTTPS/TLS] Tráfico cifrado (Puerto 443)\n"
+
+                # Formateo Profesional
+                line = f"┌───[{ts}] {proto} {'─'*(45-len(proto))}\n"
+                line += f"│ 👤 ORIGEN:  {src}:{sport}\n"
+                line += f"│ 🎯 DESTINO: {dst}:{dport}\n"
+                line += f"│ 📦 TAMAÑO:  {size} bytes\n"
+                if intel: line += f"│\n│{intel}"
+                
+                # Payload con vista Hex-Text profesional
+                if Raw in pkt:
+                    raw_data = pkt[Raw].load
+                    # Intento de decodificación múltiple
+                    text = ""
+                    for enc in ["utf-8", "latin-1"]:
+                        try:
+                            text = raw_data.decode(enc)
+                            break
+                        except: continue
+                    
+                    if not text: text = raw_data.decode("utf-8", errors="replace")
+                    
+                    clean = ''.join(c if c.isprintable() or c in "\n\r\t" else "." for c in text)
+                    if clean.strip():
+                        msg_lines = clean.strip().splitlines()[:5]
+                        line += "│\n│ 💬 CONTENIDO:\n"
+                        for l in msg_lines:
+                            line += f"│    > {l[:100]}\n"
+                
+                line += "└" + "─"*55 + "\n\n"
 
                 with self.sniff_lock:
                     self.sniff_buffer.append(line)
