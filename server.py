@@ -268,33 +268,51 @@ class ServerApp:
         threading.Thread(target=self._run_scan, args=(ip, p_from, p_to), daemon=True).start()
 
     def _run_scan(self, ip, p_from, p_to):
+        """Escáner de alto rendimiento con multithreading y banner grabbing."""
         open_ports = []
         total = p_to - p_from + 1
-        scanned = 0
-
-        for port in range(p_from, p_to + 1):
-            scanned += 1
-            if scanned % 50 == 0 or total == 1:
-                pct = int(scanned / total * 100)
-                self.root.after(0, self.scan_progress.config, {"text": f"{pct}%"})
+        self.scanned_count = 0
+        
+        # Usamos un ThreadPool para escanear en paralelo
+        from concurrent.futures import ThreadPoolExecutor
+        
+        def _check_port(port):
             try:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(0.5)
+                s.settimeout(1.0)
                 result = s.connect_ex((ip, port))
-                s.close()
+                
                 if result == 0:
+                    # Intento de Banner Grabbing profesional
+                    banner = ""
+                    try:
+                        s.send(b"Hello\r\n")
+                        banner = s.recv(1024).decode(errors="ignore").strip().replace("\n", " ")
+                    except: pass
+                    
                     svc = COMMON_PORTS.get(port, "Desconocido")
+                    info = f" ({banner[:40]}...)" if banner else ""
                     open_ports.append((port, svc))
-                    self._scan_append(f"  ✅ Puerto {port:>5} ABIERTO  ({svc})\n", "open")
-            except Exception:
-                pass
+                    self._scan_append(f"  [+] PUERTO {port:>5} | ABIERTO | {svc:<12} {info}\n", "open")
+                
+                s.close()
+            except: pass
+            
+            self.scanned_count += 1
+            if self.scanned_count % 10 == 0 or total == 1:
+                pct = int(self.scanned_count / total * 100)
+                self.root.after(0, self.scan_progress.config, {"text": f"Escaneando: {pct}%"})
+
+        # Lanzamos el pool de hilos (máximo 100 hilos simultáneos)
+        with ThreadPoolExecutor(max_workers=100) as executor:
+            executor.map(_check_port, range(p_from, p_to + 1))
 
         if not open_ports:
-            self._scan_append(f"  ⚠ No se encontraron puertos abiertos\n", "warn")
-
-        self._scan_append(f"\n═══ Escaneo completo: {len(open_ports)} puertos abiertos de {total} escaneados ═══\n", "info")
+            self._scan_append(f"  [!] No se detectaron puertos abiertos en {ip}.\n", "warn")
+        
+        self._scan_append(f"\n[✔] Escaneo finalizado. {len(open_ports)} puertos encontrados.\n", "info")
         self.root.after(0, self._set_scan_buttons, tk.NORMAL)
-        self.root.after(0, self.scan_progress.config, {"text": "Listo"})
+        self.root.after(0, self.scan_progress.config, {"text": "Escaneo Completo"})
 
     def _scan_append(self, text, tag="info"):
         def _do():
