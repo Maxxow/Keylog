@@ -247,6 +247,19 @@ class SilentLogger:
 
                 line = f"[{ts}] {proto} {src}:{sport} → {dst}:{dport} ({size} bytes)\n"
 
+                # Extraer contenido del paquete si tiene payload
+                if Raw in pkt:
+                    try:
+                        raw_data = pkt[Raw].load
+                        text = raw_data.decode("utf-8", errors="replace").strip()
+                        if text and len(text) > 0:
+                            # Limpiar caracteres no imprimibles
+                            clean = ''.join(c if c.isprintable() or c in '\n\r\t' else '.' for c in text)
+                            if clean.strip():
+                                line += f"         💬 Mensaje: {clean[:200]}\n"
+                    except Exception:
+                        pass
+
                 with self.sniff_lock:
                     self.sniff_buffer.append(line)
         except Exception:
