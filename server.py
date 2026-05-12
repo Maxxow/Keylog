@@ -444,9 +444,10 @@ class ServerApp:
         self.sniff_log = scrolledtext.ScrolledText(frame, bg="#0d1117", fg="#79c0ff",
                                                     font=("Courier", 10), state=tk.DISABLED, wrap=tk.WORD)
         self.sniff_log.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        self.sniff_log.tag_config("pkt", foreground="#79c0ff")
+        self.sniff_log.tag_config("pkt", foreground="#00d2ff") # Cian brillante
         self.sniff_log.tag_config("info", foreground="#58a6ff")
         self.sniff_log.tag_config("file", foreground="#3fb950")
+        self.sniff_log.tag_config("intel", foreground="#f0c040") # Oro para inteligencia de red
 
     def _sniff_append(self, text, tag="info"):
         def _do():
